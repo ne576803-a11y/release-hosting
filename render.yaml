@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: release-hosting
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: REPO_FULL_NAME
+        value: txrszone/release-hosting
+      - key: SITE_NAME
+        value: Release Hosting
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: ADMIN_KEY
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: 100
