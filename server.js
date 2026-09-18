@@ -11,162 +11,89 @@ const MAX_UPLOAD_MB = Math.max(1, Number(process.env.MAX_UPLOAD_MB || 100));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 }
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: 20 }
 });
-
 app.use(express.json({ limit: "2mb" }));
 
-function esc(v = "") {
-  return String(v).replace(/[&<>"']/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+function esc(value = "") {
+  return String(value).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
 }
-
+function safeName(value) {
+  const name = String(value || "").replace(/[\\/\r\n]/g, "_").trim();
+  return name || "uploaded-file";
+}
 function auth(req, res, next) {
-  if (!ADMIN_KEY) return res.status(503).json({error:"ADMIN_KEY is not configured on Render."});
+  if (!ADMIN_KEY) return res.status(503).json({ error: "ADMIN_KEY is not configured." });
   const key = req.get("x-admin-key") || req.query.key || "";
-  if (key !== ADMIN_KEY) return res.status(401).json({error:"Invalid admin key."});
+  if (key !== ADMIN_KEY) return res.status(401).json({ error: "Invalid admin key." });
   next();
 }
-
 async function gh(path, options = {}) {
   const headers = {
-    "Accept": "application/vnd.github+json",
+    Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
     ...(options.headers || {})
   };
   if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
-  const r = await fetch(`https://api.github.com${path}`, {...options, headers});
-  const text = await r.text();
+  const response = await fetch(`https://api.github.com${path}`, { ...options, headers });
+  const text = await response.text();
   let data;
-  try { data = JSON.parse(text); } catch { data = text; }
-  if (!r.ok) {
-    const msg = data?.message || `GitHub API error ${r.status}`;
-    const e = new Error(msg);
-    e.status = r.status;
-    throw e;
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text }; }
+  if (!response.ok) {
+    const error = new Error(data.message || `GitHub API error ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
-
-function layout(title, body, extraScript = "") {
-  return `<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} • ${esc(SITE_NAME)}</title>
-<style>
-:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-*{box-sizing:border-box}body{margin:0;background:#0f1220;color:#f5f7ff}
-a{color:inherit}.wrap{max-width:1050px;margin:auto;padding:20px}
-nav{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:24px}
-.brand{font-size:22px;font-weight:800;text-decoration:none}
-.btn,button{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:10px;padding:10px 14px;background:#5865f2;color:#fff;text-decoration:none;cursor:pointer;font-weight:700}
-.btn.alt{background:#252b40}.hero,.card{background:#171b2d;border:1px solid #292f49;border-radius:16px;padding:20px}
-.hero{margin-bottom:18px}.muted{color:#aab2cc}.tag{display:inline-block;background:#272e48;padding:4px 8px;border-radius:999px;font-size:12px;margin:3px}
-.search{width:100%;padding:13px 15px;border-radius:12px;border:1px solid #343b58;background:#0c1020;color:#fff;margin:14px 0 18px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}
-.card h2{margin:0 0 8px}.assets{margin-top:14px}.asset{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 0;border-top:1px solid #292f49}
-.asset-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note{white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto}
-form{display:grid;gap:12px}.field{display:grid;gap:6px}input,select,textarea{width:100%;padding:12px;border-radius:10px;border:1px solid #343b58;background:#0c1020;color:#fff}
-.filebox{padding:18px;border:1px dashed #5865f2;border-radius:12px}.danger{background:#b83b4b}
-.preview{max-width:100%;max-height:420px;border-radius:12px;margin-top:10px}
-video{width:100%;max-height:520px;border-radius:12px;margin-top:10px}
-.notice{padding:12px;border-radius:10px;background:#222941;margin:10px 0}
-@media(max-width:600px){.wrap{padding:14px}.asset{align-items:flex-start;flex-direction:column}.asset .btn{width:100%}}
-</style></head><body><main class="wrap">
-<nav><a class="brand" href="/">${esc(SITE_NAME)}</a><a class="btn alt" href="/admin">Admin Upload</a></nav>
-${body}</main>${extraScript}</body></html>`;
+function layout(title, body, script = "") {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} • ${esc(SITE_NAME)}</title><style>
+:root{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0f1220;color:#f5f7ff}.wrap{max-width:1050px;margin:auto;padding:20px}a{color:inherit}.brand{font-size:22px;font-weight:800;text-decoration:none}nav{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:24px}.btn,button{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:10px;padding:10px 14px;background:#5865f2;color:#fff;text-decoration:none;cursor:pointer;font-weight:700}.btn.alt{background:#252b40}.danger{background:#b83b4b}.hero,.card{background:#171b2d;border:1px solid #292f49;border-radius:16px;padding:20px}.hero{margin-bottom:18px}.muted{color:#aab2cc}.tag{display:inline-block;background:#272e48;padding:4px 8px;border-radius:999px;font-size:12px;margin:3px}.search,input,select{width:100%;padding:12px;border-radius:10px;border:1px solid #343b58;background:#0c1020;color:#fff}.search{margin:14px 0 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}.assets{margin-top:14px}.asset{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 0;border-top:1px solid #292f49}.asset-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.asset-actions{display:flex;gap:8px;align-items:center;min-width:210px}.asset-actions input{min-width:0}.field{display:grid;gap:6px;margin:12px 0}.filebox{padding:18px;border:1px dashed #5865f2;border-radius:12px}.notice{padding:12px;border-radius:10px;background:#222941;margin:10px 0}.selected{display:grid;gap:8px;margin-top:10px}.selected-file{display:grid;grid-template-columns:1fr 180px;gap:8px;align-items:center}.progress{height:10px;border-radius:99px;background:#292f49;overflow:hidden;margin:10px 0}.progress>i{display:block;height:100%;width:0;background:#67e8a5;transition:width .15s}.success{color:#67e8a5}.error{color:#ff8c9a}@media(max-width:600px){.wrap{padding:14px}nav{align-items:flex-start;flex-wrap:wrap}.asset{align-items:stretch;flex-direction:column}.asset-actions{min-width:0}.selected-file{grid-template-columns:1fr}.asset-actions .btn, .asset-actions button{flex:1}}
+</style></head><body><main class="wrap"><nav><a class="brand" href="/">${esc(SITE_NAME)}</a><a class="btn alt" href="/admin">Admin Upload</a></nav>${body}</main>${script}</body></html>`;
 }
-
-function assetHtml(a, release) {
-  const safeUrl = esc(a.browser_download_url);
-  const name = esc(a.name);
-  const size = a.size ? `${(a.size/1024/1024).toFixed(2)} MB` : "";
-  const ext = (a.name.split(".").pop() || "").toLowerCase();
-  let preview = "";
-  if (["jpg","jpeg","png","gif","webp","svg"].includes(ext)) preview = `<img class="preview" src="${safeUrl}" alt="${name}" loading="lazy">`;
-  if (["mp4","webm","ogg"].includes(ext)) preview = `<video controls preload="metadata" src="${safeUrl}"></video>`;
-  return `<div class="asset"><div style="min-width:0"><div class="asset-name">${name}</div><small class="muted">${size} • ${esc(a.download_count)} downloads</small>${preview}</div><a class="btn" href="${safeUrl}" target="_blank" rel="noopener">Download</a></div>`;
+async function releases() { return gh(`/repos/${encodeURIComponent(REPO)}/releases?per_page=100`); }
+function assetRow(asset) {
+  return `<div class="asset" data-asset-id="${esc(asset.id)}"><div style="min-width:0"><div class="asset-name">${esc(asset.name)}</div><small class="muted">${asset.size ? (asset.size / 1048576).toFixed(2) + " MB" : ""} • ${esc(asset.download_count || 0)} downloads</small></div><div class="asset-actions"><input class="asset-new-name" value="${esc(asset.name)}" aria-label="New filename"><button type="button" class="rename-asset">Rename</button><button type="button" class="delete-asset danger">Delete</button></div></div>`;
 }
-
-async function releases() {
-  return gh(`/repos/${encodeURIComponent(REPO)}/releases?per_page=100`);
-}
-
-app.get("/", async (req,res) => {
+app.get("/", async (req, res) => {
   try {
     const list = await releases();
-    const cards = list.map(r => `<article class="card release-card" data-search="${esc((r.name||r.tag_name||"")+" "+(r.body||""))}">
-      <h2>${esc(r.name || r.tag_name)}</h2>
-      <span class="tag">${esc(r.tag_name)}</span>
-      ${r.prerelease ? '<span class="tag">Pre-release</span>' : ''}
-      <p class="muted">${r.published_at ? new Date(r.published_at).toLocaleString() : "Unpublished"}</p>
-      <p>${esc((r.body || "").slice(0,240))}${(r.body||"").length>240?"…":""}</p>
-      <a class="btn" href="/release/${encodeURIComponent(r.tag_name)}">View Release</a>
-    </article>`).join("");
-    res.send(layout(SITE_NAME, `<section class="hero"><h1>${esc(SITE_NAME)}</h1><p class="muted">Releases from ${esc(REPO)}</p><input id="search" class="search" placeholder="Search releases..."></section><section class="grid" id="list">${cards || '<div class="card">No releases found.</div>'}</section>`,
-`<script>const s=document.querySelector('#search');s.oninput=()=>{const q=s.value.toLowerCase();document.querySelectorAll('.release-card').forEach(x=>x.style.display=x.dataset.search.toLowerCase().includes(q)?'block':'none')}</script>`));
-  } catch(e) { res.status(500).send(layout("Error", `<div class="card"><h2>Could not load releases</h2><p>${esc(e.message)}</p></div>`)); }
+    const cards = list.map(r => `<article class="card release-card" data-search="${esc(`${r.name || ""} ${r.tag_name || ""} ${r.body || ""}`)}"><h2>${esc(r.name || r.tag_name)}</h2><span class="tag">${esc(r.tag_name)}</span><p class="muted">${r.published_at ? new Date(r.published_at).toLocaleString() : "Unpublished"}</p><p>${esc((r.body || "").slice(0, 240))}</p><a class="btn" href="/release/${encodeURIComponent(r.tag_name)}">View Release</a></article>`).join("");
+    res.send(layout(SITE_NAME, `<section class="hero"><h1>${esc(SITE_NAME)}</h1><p class="muted">Releases from ${esc(REPO)}</p><input id="search" class="search" placeholder="Search releases..."><div class="grid">${cards || "<p class='muted'>No releases found.</p>"}</div></section>`, `<script>const s=document.querySelector('#search');s.oninput=()=>{const q=s.value.toLowerCase();document.querySelectorAll('.release-card').forEach(x=>x.hidden=!x.dataset.search.toLowerCase().includes(q))};</script>`));
+  } catch (e) { res.status(500).send(layout("Error", `<div class="card"><h2>Could not load releases</h2><p>${esc(e.message)}</p></div>`)); }
 });
-
-app.get("/release/:tag", async (req,res) => {
+app.get("/release/:tag", async (req, res) => {
   try {
-    const tag = req.params.tag;
-    const r = await gh(`/repos/${encodeURIComponent(REPO)}/releases/tags/${encodeURIComponent(tag)}`);
-    const assets = (r.assets || []).map(a => assetHtml(a,r)).join("");
-    res.send(layout(r.name || r.tag_name, `<section class="hero"><a class="muted" href="/">← All releases</a><h1>${esc(r.name || r.tag_name)}</h1><span class="tag">${esc(r.tag_name)}</span><p class="muted">${r.published_at ? new Date(r.published_at).toLocaleString() : "Unpublished"}</p><div class="note">${esc(r.body || "No release notes.")}</div></section><section class="card"><h2>Files (${r.assets?.length || 0})</h2><div class="assets">${assets || '<p class="muted">No files attached to this release.</p>'}</div></section>`));
-  } catch(e) { res.status(404).send(layout("Release not found", `<div class="card"><h2>Release not found</h2><p>${esc(e.message)}</p><a class="btn" href="/">Back</a></div>`)); }
+    const r = await gh(`/repos/${encodeURIComponent(REPO)}/releases/tags/${encodeURIComponent(req.params.tag)}`);
+    const assets = (r.assets || []).map(a => `<div class="asset"><div><div class="asset-name">${esc(a.name)}</div><small class="muted">${(a.size / 1048576).toFixed(2)} MB • ${a.download_count} downloads</small></div><a class="btn" href="${esc(a.browser_download_url)}">Download</a></div>`).join("");
+    res.send(layout(r.name || r.tag_name, `<section class="hero"><a class="muted" href="/">← All releases</a><h1>${esc(r.name || r.tag_name)}</h1><span class="tag">${esc(r.tag_name)}</span><div class="assets">${assets || "<p class='muted'>No files in this release.</p>"}</div></section>`));
+  } catch (e) { res.status(404).send(layout("Release not found", `<div class="card"><h2>Release not found</h2><p>${esc(e.message)}</p></div>`)); }
 });
-
-app.get("/admin", async (req,res) => {
-  let list = [];
-  try { list = await releases(); } catch {}
+app.get("/admin", async (req, res) => {
+  let list = []; try { list = await releases(); } catch {}
   const opts = list.map(r => `<option value="${esc(r.id)}">${esc(r.name || r.tag_name)} (${esc(r.tag_name)})</option>`).join("");
-  res.send(layout("Admin Upload", `<section class="hero"><h1>Admin Upload</h1><p class="muted">Upload an asset directly to a GitHub Release.</p><div class="notice">The admin key is only sent to this server and is never placed in the page source.</div></section>
-<section class="card"><form id="form">
-<div class="field"><label>Admin key</label><input id="key" type="password" required autocomplete="off"></div>
-<div class="field"><label>Release</label><select id="release_id" required>${opts || '<option>No releases available</option>'}</select></div>
-<div class="field"><label>File</label><div class="filebox"><input id="file" type="file" required></div></div>
-<button type="submit">Upload to GitHub Release</button>
-<div id="status"></div></form></section>`,
-`<script>
-const f=document.querySelector('#form'),st=document.querySelector('#status');
-f.onsubmit=async e=>{e.preventDefault();st.textContent='Uploading...';
-const fd=new FormData();fd.append('release_id',document.querySelector('#release_id').value);fd.append('file',document.querySelector('#file').files[0]);
-try{const r=await fetch('/api/upload',{method:'POST',headers:{'x-admin-key':document.querySelector('#key').value},body:fd});const d=await r.json();if(!r.ok)throw new Error(d.error||'Upload failed');st.innerHTML='<div class="notice">Uploaded successfully. <a href="'+d.download_url+'" target="_blank" rel="noopener">Open file</a></div>';f.reset()}catch(x){st.innerHTML='<div class="notice">'+x.message+'</div>'}};
-</script>`));
+  const body = `<section class="hero"><h1>Admin Upload</h1><p class="muted">Select files, edit their names before uploading, and manage existing release files below.</p><div class="field"><label>Admin key</label><input id="key" type="password" autocomplete="off"></div><div class="field"><label>Release</label><select id="release_id" required>${opts || '<option>No releases available</option>'}</select></div><div class="field"><label>Files</label><div class="filebox"><input id="files" type="file" multiple></div><div id="selected" class="selected"></div></div><button id="upload" type="button">Upload selected files</button><div id="status" class="notice"></div></section><section class="card"><h2>Release files</h2><p class="muted">Rename or delete files inline. The page will not reload.</p><div id="assets" class="assets"></div></section>`;
+  const script = `<script>
+const keyEl=document.querySelector('#key'),releaseEl=document.querySelector('#release_id'),filesEl=document.querySelector('#files'),selectedEl=document.querySelector('#selected'),statusEl=document.querySelector('#status'),assetsEl=document.querySelector('#assets');
+const saved=localStorage.getItem('release-admin-key');if(saved){keyEl.value=saved;keyEl.type='password'}
+let selected=[];
+function key(){const k=keyEl.value.trim();if(k)localStorage.setItem('release-admin-key',k);return k}
+function renderSelected(){selectedEl.innerHTML=selected.map((f,i)=>'<div class="selected-file"><span>'+escapeHtml(f.name)+'</span><input data-index="'+i+'" value="'+escapeHtml(f.uploadName)+'" aria-label="Upload filename"></div>').join('');selectedEl.querySelectorAll('input').forEach(x=>x.oninput=()=>{selected[Number(x.dataset.index)].uploadName=x.value})}
+function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+filesEl.onchange=()=>{selected=[...filesEl.files].map(file=>({file,uploadName:file.name}));renderSelected()};
+async function loadAssets(){assetsEl.innerHTML='<p class="muted">Loading...</p>';try{const r=await fetch('/api/release/'+releaseEl.value+'/assets',{headers:{'x-admin-key':key()}});const d=await r.json();if(!r.ok)throw Error(d.error||'Could not load files');assetsEl.innerHTML=d.assets.map(a=>${JSON.stringify("assetRow")}(a)).join('')||'<p class="muted">No files in this release.</p>';bindAssetActions()}catch(e){assetsEl.innerHTML='<p class="error">'+escapeHtml(e.message)+'</p>'}}
+function bindAssetActions(){assetsEl.querySelectorAll('.rename-asset').forEach(btn=>btn.onclick=async()=>{const row=btn.closest('.asset'),name=row.querySelector('.asset-new-name').value.trim();if(!name)return;btn.disabled=true;try{const r=await fetch('/api/assets/'+row.dataset.assetId,{method:'PATCH',headers:{'Content-Type':'application/json','x-admin-key':key()},body:JSON.stringify({name,release_id:releaseEl.value})});const d=await r.json();if(!r.ok)throw Error(d.error||'Rename failed');row.querySelector('.asset-name').textContent=d.asset.name;row.querySelector('.asset-new-name').value=d.asset.name;statusEl.innerHTML='<span class="success">Renamed successfully.</span>'}catch(e){statusEl.innerHTML='<span class="error">'+escapeHtml(e.message)+'</span>'}finally{btn.disabled=false}});assetsEl.querySelectorAll('.delete-asset').forEach(btn=>btn.onclick=async()=>{const row=btn.closest('.asset');if(!confirm('Delete '+row.querySelector('.asset-name').textContent+'?'))return;btn.disabled=true;try{const r=await fetch('/api/assets/'+row.dataset.assetId+'?release_id='+encodeURIComponent(releaseEl.value),{method:'DELETE',headers:{'x-admin-key':key()}});const d=await r.json();if(!r.ok)throw Error(d.error||'Delete failed');row.remove();statusEl.innerHTML='<span class="success">Deleted successfully.</span>'}catch(e){statusEl.innerHTML='<span class="error">'+escapeHtml(e.message)+'</span>'}finally{btn.disabled=false}})}
+releaseEl.onchange=loadAssets;loadAssets();
+function uploadOne(item,index){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();const fd=new FormData();fd.append('release_id',releaseEl.value);fd.append('file',item.file,item.uploadName);xhr.open('POST','/api/upload');xhr.setRequestHeader('x-admin-key',key());xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);statusEl.innerHTML='Uploading '+(index+1)+'/'+selected.length+': '+p+'% ('+(e.loaded/1048576).toFixed(2)+' MB / '+(e.total/1048576).toFixed(2)+' MB)'}};xhr.onload=()=>{let d={};try{d=JSON.parse(xhr.responseText)}catch{};if(xhr.status>=200&&xhr.status<300)resolve(d);else reject(Error(d.error||'Upload failed'))};xhr.onerror=()=>reject(Error('Upload connection failed'));xhr.ontimeout=()=>reject(Error('Upload timed out'));xhr.timeout=25*60*1000;xhr.send(fd)})}
+document.querySelector('#upload').onclick=async()=>{if(!selected.length){statusEl.textContent='Select at least one file.';return}const btn=document.querySelector('#upload');btn.disabled=true;let ok=0;try{for(let i=0;i<selected.length;i++){await uploadOne(selected[i],i);ok++}statusEl.innerHTML='<span class="success">Uploaded '+ok+' file(s) successfully.</span>';selected=[];filesEl.value='';selectedEl.innerHTML='';await loadAssets()}catch(e){statusEl.innerHTML='<span class="error">'+escapeHtml(e.message)+' ('+ok+'/'+selected.length+' completed)</span>';await loadAssets()}finally{btn.disabled=false}};
+</script>`;
+  res.send(layout("Admin Upload", body, script));
 });
-
-app.post("/api/upload", auth, upload.single("file"), async (req,res) => {
-  try {
-    if (!GITHUB_TOKEN) return res.status(503).json({error:"GITHUB_TOKEN is not configured."});
-    if (!req.file) return res.status(400).json({error:"No file selected."});
-    const releaseId = Number(req.body.release_id);
-    if (!releaseId) return res.status(400).json({error:"Invalid release."});
-
-    const release = await gh(`/repos/${encodeURIComponent(REPO)}/releases/${releaseId}`);
-    const filename = req.file.originalname.replace(/[\/\\]/g,"_");
-    const uploadUrl = `https://uploads.github.com/repos/${encodeURIComponent(REPO)}/releases/${releaseId}/assets?name=${encodeURIComponent(filename)}`;
-
-    const r = await fetch(uploadUrl, {
-      method:"POST",
-      headers:{
-        "Authorization":`Bearer ${GITHUB_TOKEN}`,
-        "Accept":"application/vnd.github+json",
-        "Content-Type":req.file.mimetype || "application/octet-stream",
-        "Content-Length":String(req.file.size),
-        "X-GitHub-Api-Version":"2022-11-28"
-      },
-      body:req.file.buffer
-    });
-    const text=await r.text();
-    let data; try{data=JSON.parse(text)}catch{data={message:text}};
-    if(!r.ok) return res.status(r.status).json({error:data.message||"GitHub upload failed."});
-    res.json({ok:true,name:data.name,download_url:data.browser_download_url,release:release.tag_name});
-  } catch(e) {
-    res.status(e.status || 500).json({error:e.message || "Upload failed."});
-  }
-});
-
-app.get("/health",(req,res)=>res.json({ok:true,repo:REPO}));
+app.get('/api/release/:id/assets', auth, async (req,res)=>{try{const r=await gh(`/repos/${encodeURIComponent(REPO)}/releases/${Number(req.params.id)}`);res.json({assets:r.assets||[]})}catch(e){res.status(e.status||500).json({error:e.message})}});
+app.post('/api/upload', auth, upload.single('file'), async (req,res)=>{try{if(!GITHUB_TOKEN)return res.status(503).json({error:'GITHUB_TOKEN is not configured.'});if(!req.file)return res.status(400).json({error:'No file selected.'});const id=Number(req.body.release_id);if(!id)return res.status(400).json({error:'Invalid release.'});const filename=safeName(req.file.originalname);const r=await fetch(`https://uploads.github.com/repos/${encodeURIComponent(REPO)}/releases/${id}/assets?name=${encodeURIComponent(filename)}`,{method:'POST',headers:{Authorization:`Bearer ${GITHUB_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':req.file.mimetype||'application/octet-stream','Content-Length':String(req.file.size),'X-GitHub-Api-Version':'2022-11-28'},body:req.file.buffer});const text=await r.text();let data;try{data=JSON.parse(text)}catch{data={message:text}}if(!r.ok)return res.status(r.status).json({error:data.message||'GitHub upload failed.'});res.json({ok:true,asset:data})}catch(e){res.status(e.status||500).json({error:e.message||'Upload failed.'})}});
+app.patch('/api/assets/:id',auth,async(req,res)=>{try{const name=safeName(req.body.name);if(!name)return res.status(400).json({error:'A filename is required.'});const asset=await gh(`/repos/${encodeURIComponent(REPO)}/releases/assets/${Number(req.params.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});res.json({ok:true,asset})}catch(e){res.status(e.status||500).json({error:e.message})}});
+app.delete('/api/assets/:id',auth,async(req,res)=>{try{await gh(`/repos/${encodeURIComponent(REPO)}/releases/assets/${Number(req.params.id)}`,{method:'DELETE'});res.json({ok:true})}catch(e){res.status(e.status||500).json({error:e.message})}});
+app.get('/health',(req,res)=>res.json({ok:true,repo:REPO}));
 app.listen(PORT,()=>console.log(`${SITE_NAME} running on port ${PORT}`));
