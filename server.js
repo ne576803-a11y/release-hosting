@@ -24,9 +24,9 @@ const upload = multer({
 app.use(express.json({ limit: "2mb" }));
 
 
-// =========================
+// ==================================================
 // HTML ESCAPE
-// =========================
+// ==================================================
 
 function esc(value = "") {
   return String(value).replace(/[&<>"']/g, (c) => ({
@@ -39,9 +39,9 @@ function esc(value = "") {
 }
 
 
-// =========================
-// ADMIN AUTH
-// =========================
+// ==================================================
+// ADMIN AUTHENTICATION
+// ==================================================
 
 function auth(req, res, next) {
   if (!ADMIN_KEY) {
@@ -65,9 +65,9 @@ function auth(req, res, next) {
 }
 
 
-// =========================
-// GITHUB API HELPER
-// =========================
+// ==================================================
+// GITHUB API
+// ==================================================
 
 async function gh(path, options = {}) {
   const headers = {
@@ -113,9 +113,9 @@ async function gh(path, options = {}) {
 }
 
 
-// =========================
+// ==================================================
 // GET RELEASES
-// =========================
+// ==================================================
 
 async function releases() {
   return gh(
@@ -124,13 +124,12 @@ async function releases() {
 }
 
 
-// =========================
+// ==================================================
 // PAGE LAYOUT
-// =========================
+// ==================================================
 
 function layout(title, body, extraScript = "") {
   return `<!doctype html>
-
 <html lang="en">
 
 <head>
@@ -142,9 +141,7 @@ function layout(title, body, extraScript = "") {
   content="width=device-width,initial-scale=1"
 >
 
-<title>
-${esc(title)} • ${esc(SITE_NAME)}
-</title>
+<title>${esc(title)} • ${esc(SITE_NAME)}</title>
 
 <style>
 
@@ -337,6 +334,10 @@ video {
   background: #b83b4b;
 }
 
+.success {
+  background: #245c42;
+}
+
 .release-meta {
   margin-top: 8px;
   font-size: 14px;
@@ -415,9 +416,9 @@ ${extraScript}
 }
 
 
-// =========================
-// ASSET HTML
-// =========================
+// ==================================================
+// RELEASE ASSET HTML
+// ==================================================
 
 function assetHtml(asset) {
 
@@ -438,7 +439,7 @@ function assetHtml(asset) {
 
   let preview = "";
 
-  // IMAGE
+  // IMAGE PREVIEW
 
   if (
     [
@@ -450,7 +451,6 @@ function assetHtml(asset) {
       "svg"
     ].includes(extension)
   ) {
-
     preview = `
       <img
         class="preview"
@@ -459,10 +459,9 @@ function assetHtml(asset) {
         loading="lazy"
       >
     `;
-
   }
 
-  // VIDEO
+  // VIDEO PLAYER
 
   if (
     [
@@ -471,7 +470,6 @@ function assetHtml(asset) {
       "ogg"
     ].includes(extension)
   ) {
-
     preview = `
       <video
         controls
@@ -479,7 +477,6 @@ function assetHtml(asset) {
         src="${safeUrl}"
       ></video>
     `;
-
   }
 
   return `
@@ -516,9 +513,9 @@ function assetHtml(asset) {
 }
 
 
-// =========================
-// API: RELEASES
-// =========================
+// ==================================================
+// API: GET RELEASES
+// ==================================================
 
 app.get("/api/releases", async (req, res) => {
 
@@ -544,9 +541,9 @@ app.get("/api/releases", async (req, res) => {
 });
 
 
-// =========================
+// ==================================================
 // HOME PAGE
-// =========================
+// ==================================================
 
 app.get("/", async (req, res) => {
 
@@ -564,6 +561,23 @@ app.get("/", async (req, res) => {
       const body =
         release.body || "";
 
+      const published =
+        release.published_at
+          ? new Date(
+              release.published_at
+            ).toLocaleString()
+          : "Unpublished";
+
+      const prerelease =
+        release.prerelease
+          ? '<span class="tag">Pre-release</span>'
+          : "";
+
+      const draft =
+        release.draft
+          ? '<span class="tag">Draft</span>'
+          : "";
+
       return `
         <article
           class="card release-card"
@@ -580,42 +594,17 @@ app.get("/", async (req, res) => {
             ${esc(release.tag_name)}
           </span>
 
-          ${
-            release.prerelease
-              ? '<span class="tag">Pre-release</span>'
-              : ""
-          }
+          ${prerelease}
 
-          ${
-            release.draft
-              ? '<span class="tag">Draft</span>'
-              : ""
-          }
+          ${draft}
 
           <p class="muted release-meta">
-
-            ${
-              release.published_at
-                ? new Date(
-                    release.published_at
-                  ).toLocaleString()
-                : "Unpublished"
-            }
-
+            ${esc(published)}
           </p>
 
           <p>
-
-            ${esc(
-              body.slice(0, 240)
-            )}
-
-            ${
-              body.length > 240
-                ? "…"
-                : ""
-            }
-
+            ${esc(body.slice(0, 240))}
+            ${body.length > 240 ? "…" : ""}
           </p>
 
           <a
@@ -629,12 +618,10 @@ app.get("/", async (req, res) => {
 
         </article>
       `;
-
     }).join("");
 
 
     const content = `
-
       <section class="hero">
 
         <h1>
@@ -663,10 +650,15 @@ app.get("/", async (req, res) => {
           cards ||
           `
             <div class="card empty">
-              <h2>No releases found</h2>
+
+              <h2>
+                No releases found
+              </h2>
+
               <p class="muted">
                 No GitHub releases are available.
               </p>
+
             </div>
           `
         }
@@ -675,16 +667,13 @@ app.get("/", async (req, res) => {
     `;
 
 
-    res.send(
-      layout(
-        SITE_NAME,
-        content,
+    const script = `
+      <script>
 
-        `
-        <script>
+      const search =
+        document.querySelector("#search");
 
-        const search =
-          document.querySelector("#search");
+      if (search) {
 
         search.addEventListener(
           "input",
@@ -711,8 +700,17 @@ app.get("/", async (req, res) => {
           }
         );
 
-        </script>
-        `
+      }
+
+      </script>
+    `;
+
+
+    res.send(
+      layout(
+        SITE_NAME,
+        content,
+        script
       )
     );
 
@@ -757,9 +755,9 @@ app.get("/", async (req, res) => {
 });
 
 
-// =========================
-// SINGLE RELEASE
-// =========================
+// ==================================================
+// SINGLE RELEASE PAGE
+// ==================================================
 
 app.get("/release/:tag", async (req, res) => {
 
@@ -781,6 +779,20 @@ app.get("/release/:tag", async (req, res) => {
         .join("");
 
 
+    const releaseName =
+      release.name ||
+      release.tag_name ||
+      "Release";
+
+
+    const published =
+      release.published_at
+        ? new Date(
+            release.published_at
+          ).toLocaleString()
+        : "Unpublished";
+
+
     const content = `
 
       <section class="hero">
@@ -793,10 +805,7 @@ app.get("/release/:tag", async (req, res) => {
         </a>
 
         <h1>
-          ${esc(
-            release.name ||
-            release.tag_name
-          )}
+          ${esc(releaseName)}
         </h1>
 
         <span class="tag">
@@ -810,24 +819,14 @@ app.get("/release/:tag", async (req, res) => {
         }
 
         <p class="muted">
-
-          ${
-            release.published_at
-              ? new Date(
-                  release.published_at
-                ).toLocaleString()
-              : "Unpublished"
-          }
-
+          ${esc(published)}
         </p>
 
         <div class="note">
-
           ${esc(
             release.body ||
             "No release notes."
           )}
-
         </div>
 
       </section>
@@ -859,9 +858,7 @@ app.get("/release/:tag", async (req, res) => {
 
     res.send(
       layout(
-        release.name ||
-        release.tag_name,
-
+        releaseName,
         content
       )
     );
@@ -902,14 +899,13 @@ app.get("/release/:tag", async (req, res) => {
 });
 
 
-// =========================
+// ==================================================
 // ADMIN PAGE
-// =========================
+// ==================================================
 
 app.get("/admin", async (req, res) => {
 
   let list = [];
-
   let loadError = "";
 
   try {
@@ -919,28 +915,41 @@ app.get("/admin", async (req, res) => {
   } catch (error) {
 
     loadError =
-      error.message || "Could not load releases.";
+      error.message ||
+      "Could not load releases.";
 
   }
 
 
-  const options = list
-    .map((release) => {
+  const options =
+    list
+      .map((release) => {
 
-      return `
-        <option
-          value="${esc(release.id)}"
-        >
-          ${esc(
-            release.name ||
-            release.tag_name
-          )}
-          (${esc(release.tag_name)})
+        const name =
+          release.name ||
+          release.tag_name ||
+          "Untitled Release";
+
+        return `
+          <option
+            value="${esc(release.id)}"
+          >
+            ${esc(name)}
+            (${esc(release.tag_name)})
+          </option>
+        `;
+      })
+      .join("");
+
+
+  const releaseSelect =
+    options
+      ? options
+      : `
+        <option value="">
+          No releases available
         </option>
       `;
-
-    })
-    .join("");
 
 
   const content = `
@@ -1010,14 +1019,7 @@ app.get("/admin", async (req, res) => {
             required
           >
 
-            ${
-              options ||
-              `
-                <option value="">
-                  No releases available
-                </option>
-              `
-            }
+            ${releaseSelect}
 
           </select>
 
@@ -1064,6 +1066,10 @@ app.get("/admin", async (req, res) => {
   `;
 
 
+  // IMPORTANT:
+  // No nested JavaScript template literals here.
+  // This prevents the previous syntax error.
+
   const script = `
 
     <script>
@@ -1075,125 +1081,158 @@ app.get("/admin", async (req, res) => {
       document.querySelector("#status");
 
 
-    form.addEventListener(
-      "submit",
-      async (event) => {
+    if (form) {
 
-        event.preventDefault();
+      form.addEventListener(
+        "submit",
+        async (event) => {
 
-        status.innerHTML =
-          '<div class="notice">Uploading...</div>';
+          event.preventDefault();
 
-
-        const key =
-          document.querySelector("#key").value;
-
-        const releaseId =
-          document.querySelector("#release_id").value;
-
-        const fileInput =
-          document.querySelector("#file");
-
-        const file =
-          fileInput.files[0];
-
-
-        if (!file) {
 
           status.innerHTML =
-            '<div class="notice danger">Please select a file.</div>';
-
-          return;
-
-        }
+            '<div class="notice">Uploading...</div>';
 
 
-        const formData =
-          new FormData();
+          const key =
+            document.querySelector("#key").value;
 
-        formData.append(
-          "release_id",
-          releaseId
-        );
+          const releaseId =
+            document.querySelector("#release_id").value;
 
-        formData.append(
-          "file",
-          file
-        );
+          const fileInput =
+            document.querySelector("#file");
 
-
-        try {
-
-          const response =
-            await fetch(
-              "/api/upload",
-              {
-                method: "POST",
-
-                headers: {
-                  "x-admin-key": key
-                },
-
-                body: formData
-              }
-            );
+          const file =
+            fileInput.files[0];
 
 
-          const data =
-            await response.json();
+          if (!file) {
 
+            status.innerHTML =
+              '<div class="notice danger">Please select a file.</div>';
 
-          if (!response.ok) {
-
-            throw new Error(
-              data.error ||
-              "Upload failed."
-            );
+            return;
 
           }
 
 
-          status.innerHTML = `
-
-            <div class="notice">
-
-              <strong>
-                Upload successful!
-              </strong>
-
-              <br><br>
-
-              <a
-                href="${data.download_url}"
-                target="_blank"
-                rel="noopener"
-              >
-                Open uploaded file
-              </a>
-
-            </div>
-
-          `;
+          const formData =
+            new FormData();
 
 
-          form.reset();
+          formData.append(
+            "release_id",
+            releaseId
+          );
 
-        } catch (error) {
 
-          status.innerHTML = `
+          formData.append(
+            "file",
+            file
+          );
 
-            <div class="notice danger">
 
-              ${error.message}
+          try {
 
-            </div>
+            const response =
+              await fetch(
+                "/api/upload",
+                {
+                  method: "POST",
 
-          `;
+                  headers: {
+                    "x-admin-key": key
+                  },
+
+                  body: formData
+                }
+              );
+
+
+            const data =
+              await response.json();
+
+
+            if (!response.ok) {
+
+              throw new Error(
+                data.error ||
+                "Upload failed."
+              );
+
+            }
+
+
+            const openLink =
+              document.createElement("a");
+
+            openLink.href =
+              data.download_url;
+
+            openLink.target =
+              "_blank";
+
+            openLink.rel =
+              "noopener";
+
+            openLink.textContent =
+              "Open uploaded file";
+
+
+            status.innerHTML = "";
+
+            const success =
+              document.createElement("div");
+
+            success.className =
+              "notice success";
+
+
+            const strong =
+              document.createElement("strong");
+
+            strong.textContent =
+              "Upload successful!";
+
+
+            success.appendChild(
+              strong
+            );
+
+            success.appendChild(
+              document.createElement("br")
+            );
+
+            success.appendChild(
+              document.createElement("br")
+            );
+
+            success.appendChild(
+              openLink
+            );
+
+
+            status.appendChild(
+              success
+            );
+
+
+            form.reset();
+
+          } catch (error) {
+
+            status.innerHTML =
+              '<div class="notice danger">' +
+              error.message +
+              '</div>';
+
+          }
 
         }
+      );
 
-      }
-    );
+    }
 
     </script>
 
@@ -1211,9 +1250,9 @@ app.get("/admin", async (req, res) => {
 });
 
 
-// =========================
-// UPLOAD FILE TO RELEASE
-// =========================
+// ==================================================
+// UPLOAD FILE TO GITHUB RELEASE
+// ==================================================
 
 app.post(
   "/api/upload",
@@ -1258,7 +1297,7 @@ app.post(
       }
 
 
-      // Get release information
+      // Get release
 
       const release =
         await gh(
@@ -1273,7 +1312,7 @@ app.post(
           .replace(/[\/\\]/g, "_");
 
 
-      // GitHub upload URL
+      // GitHub release upload URL
 
       const uploadUrl =
         `https://uploads.github.com/repos/${REPO}/releases/${releaseId}/assets?name=${encodeURIComponent(filename)}`;
@@ -1305,7 +1344,8 @@ app.post(
 
             },
 
-            body: req.file.buffer
+            body:
+              req.file.buffer
           }
         );
 
@@ -1378,9 +1418,9 @@ app.post(
 );
 
 
-// =========================
+// ==================================================
 // HEALTH CHECK
-// =========================
+// ==================================================
 
 app.get(
   "/health",
@@ -1390,7 +1430,8 @@ app.get(
 
       ok: true,
 
-      repo: REPO,
+      repo:
+        REPO,
 
       site:
         SITE_NAME
@@ -1401,9 +1442,9 @@ app.get(
 );
 
 
-// =========================
+// ==================================================
 // START SERVER
-// =========================
+// ==================================================
 
 app.listen(
   PORT,
