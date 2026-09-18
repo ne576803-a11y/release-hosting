@@ -6,7 +6,7 @@ services:
     startCommand: npm start
     envVars:
       - key: REPO_FULL_NAME
-        value: txrszone/release-hosting
+        value: nusratbytxrs/release-hosting
       - key: SITE_NAME
         value: Release Hosting
       - key: GITHUB_TOKEN
