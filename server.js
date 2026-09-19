@@ -19,8 +19,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-hosting-'));
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, tempDir),
-    filename: (_req, file, cb) => {
-      // Store with a safe ASCII-only temp name; original name kept in memory by multer (file.originalname)
+    filename: (_req, _file, cb) => {
       const rand = Math.random().toString(36).slice(2);
       cb(null, `${Date.now()}-${rand}.tmp`);
     }
@@ -35,20 +34,37 @@ app.use(express.json({ limit: '2mb' }));
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
 /**
- * safeName — keeps any-language characters (Bengali, Arabic, Chinese, emoji, etc.)
- * but strips path separators and dangerous control chars.
- * Multer gives originalname already decoded as UTF-8; we just clean it.
+ * Fix mojibake caused by multer's latin1 decoding of UTF-8 filenames.
+ * If the string contains bytes in 0x80-0xFF range that form valid UTF-8,
+ * re-decode as UTF-8.
+ */
+function fixOriginalName(name) {
+  if (!name) return '';
+  const s = String(name);
+  // Detect whether all chars are <= 0xFF (i.e. likely latin1-decoded UTF-8)
+  let allLatin1 = true;
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) > 0xFF) { allLatin1 = false; break; }
+  }
+  if (!allLatin1) return s; // already has real Unicode chars, leave as-is
+  try {
+    const buf = Buffer.from(s, 'latin1');
+    const decoded = buf.toString('utf8');
+    // If decoding produced replacement chars, fall back to original
+    if (decoded.includes('\uFFFD')) return s;
+    return decoded;
+  } catch { return s; }
+}
+
+/**
+ * safeName — keeps any-language characters, strips path separators/control chars.
  */
 const safeName = value => {
   let name = String(value || '');
-  // Remove any path components (/, \, leading dirs)
   name = name.replace(/[\\/]+/g, '-');
-  // Remove control chars and null bytes
   name = name.replace(/[\u0000-\u001F\u007F]/g, '');
-  // Remove leading/trailing dots-only & whitespace
   name = name.replace(/^[.\s]+|[.\s]+$/g, '').trim();
   if (!name || name === '.' || name === '..') return '';
-  // Limit total length (filesystem + GitHub limit safety)
   if ([...name].length > 200) {
     const ext = path.extname(name);
     const base = path.basename(name, ext);
@@ -68,7 +84,6 @@ const preserveExtension = (newName, oldName) => {
   let clean = safeName(newName);
   if (!clean) return '';
   if (oldExt) {
-    // strip any extension user typed then append original
     clean = clean.replace(/\.[^./\\]+$/, '').trim();
     if (!clean) return '';
     return clean + oldExt;
@@ -130,7 +145,6 @@ const getReleaseById = id => githubApi(`/repos/${REPO}/releases/${encodeURICompo
 
 function uploadAsset(releaseId, filename, type, filePath, size) {
   return new Promise((resolve, reject) => {
-    // encodeURIComponent handles any Unicode filename correctly in the query string
     const req = https.request({
       hostname: 'uploads.github.com',
       method: 'POST',
@@ -282,6 +296,9 @@ footer{padding:38px 0;border-top:1px solid var(--line);text-align:center;color:v
 .upload-cancelled{color:var(--danger);font-weight:700}
 .upload-failed{color:var(--danger);font-weight:700}
 .result-line{display:block;padding:3px 0;overflow-wrap:anywhere;word-break:break-word}
+/* check-files link under upload status */
+.check-files-link{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--accent);text-decoration:underline;text-underline-offset:4px;font-weight:700;font-size:14.5px;transition:opacity .2s}
+.check-files-link:hover{opacity:.8}
 @media(max-width:650px){
   .selected-file{grid-template-columns:1fr auto}
   .selected-file small{grid-column:1/-1}
@@ -321,6 +338,18 @@ applyTheme();
 document.getElementById('themeBtn').onclick=function(){localStorage.setItem('release_theme',document.body.classList.contains('light')?'dark':'light');applyTheme()};
 function showToast(msg,isError){var t=document.getElementById('toast');t.textContent=msg;t.classList.toggle('error',!!isError);t.classList.add('show');clearTimeout(t._timer);t._timer=setTimeout(function(){t.classList.remove('show')},2800)}
 function humanSize(b){b=Number(b||0);if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';if(b<1073741824)return (b/1048576).toFixed(2)+' MB';return (b/1073741824).toFixed(2)+' GB'}
+/* Format a UTC ISO date string into the user's LOCAL date+time. */
+function formatLocalDateTime(iso){
+  if(!iso)return '';
+  var d=new Date(iso);
+  if(isNaN(d.getTime()))return '';
+  var dd=String(d.getDate()).padStart(2,'0');
+  var mm=String(d.getMonth()+1).padStart(2,'0');
+  var yy=d.getFullYear();
+  var hh=String(d.getHours()).padStart(2,'0');
+  var mi=String(d.getMinutes()).padStart(2,'0');
+  return dd+'/'+mm+'/'+yy+' · '+hh+':'+mi;
+}
 ${script}
 </script></body></html>`;
 }
@@ -542,7 +571,7 @@ app.get('/release/:tag', async (req, res) => {
             <div class="asset-sub">
               <span>${humanSize(asset.size)}</span>
               <span class="dot"></span>
-              <span>${new Date(asset.created_at).toLocaleDateString()} · ${new Date(asset.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+              <span data-utc="${esc(asset.created_at || '')}"></span>
             </div>
           </div>
         </div>
@@ -594,6 +623,11 @@ app.get('/release/:tag', async (req, res) => {
       </div>
     `;
     const script = `
+      // Fill in local time for every UTC timestamp
+      document.querySelectorAll('[data-utc]').forEach(function(el){
+        el.textContent=formatLocalDateTime(el.dataset.utc);
+      });
+
       var files=document.getElementById('files'),status=document.getElementById('status'),sort=document.getElementById('sort'),fileSearch=document.getElementById('fileSearch');
       var bulkBar=document.getElementById('bulkBar'),bulkCount=document.getElementById('bulkCount');
       var confirmModal=document.getElementById('confirmModal');
@@ -728,7 +762,7 @@ app.get('/release/:tag', async (req, res) => {
 app.get('/admin', async (_req, res) => {
   try {
     const releases = await getReleases();
-    const options = releases.filter(r => !r.draft).map(r => `<option value="${r.id}">${esc(r.name || r.tag_name)} (${esc(r.tag_name)})</option>`).join('');
+    const options = releases.filter(r => !r.draft).map(r => `<option value="${r.id}" data-tag="${esc(r.tag_name)}">${esc(r.name || r.tag_name)} (${esc(r.tag_name)})</option>`).join('');
     const body = `
       <section class="hero">
         <div class="hero-left">
@@ -746,6 +780,7 @@ app.get('/admin', async (_req, res) => {
     `;
     const script = `
       var keyInput=document.getElementById('adminKey'),fileInput=document.getElementById('file'),selectedBox=document.getElementById('selected'),statusBox=document.getElementById('status'),uploadBtn=document.getElementById('uploadBtn'),keyBox=document.getElementById('keyBox'),files=[];
+      var releaseSelect=document.getElementById('releaseId');
       var savedKey=localStorage.getItem('release_admin_key');
       if(savedKey){keyInput.value=savedKey;keyBox.style.display='none'}
       function safeHtml(v){return String(v).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'})[c]})}
@@ -760,9 +795,7 @@ app.get('/admin', async (_req, res) => {
             else statusTag=' <span class="upload-failed">✗ '+safeHtml(x.lastResult.error||'failed')+'</span>';
           }
           var retryBtn='';
-          if(x.lastResult&&!x.lastResult.ok&&!x.lastResult.cancelled){
-            retryBtn='<button class="btn" type="button" data-retry="'+i+'">🔄 Retry</button>';
-          }else if(x.lastResult&&x.lastResult.cancelled){
+          if(x.lastResult&&(x.lastResult.cancelled||(!x.lastResult.ok))){
             retryBtn='<button class="btn" type="button" data-retry="'+i+'">🔄 Retry</button>';
           }
           return '<div class="selected-file"><small title="'+safeHtml(x.name)+'">'+safeHtml(x.name)+statusTag+'</small>'+
@@ -789,11 +822,10 @@ app.get('/admin', async (_req, res) => {
         if(rt){
           var j=Number(rt.dataset.retry);
           if(!files[j])return;
-          // If main upload is running, wait (disable button briefly)
           if(uploadBtn.disabled){showToast('Please wait for current upload to finish.',true);return}
           var key=keyInput.value.trim();
           if(!key){showToast('Admin key required.',true);return}
-          if(!document.getElementById('releaseId').value){showToast('No release selected.',true);return}
+          if(!releaseSelect.value){showToast('No release selected.',true);return}
           var item=files[j];
           item.lastResult=null;
           render();
@@ -822,7 +854,7 @@ app.get('/admin', async (_req, res) => {
         return new Promise(function(done){
           retry=retry||0;
           var form=new FormData();
-          form.append('release_id',document.getElementById('releaseId').value);
+          form.append('release_id',releaseSelect.value);
           form.append('file',item.file,item.name);
           var q=new XMLHttpRequest(),started=performance.now();
           var slot=activeUploads[index]={xhr:q,cancelled:false};
@@ -880,6 +912,13 @@ app.get('/admin', async (_req, res) => {
         showToast('✕ Upload cancelled.',true);
       });
 
+      function releaseLink(){
+        var opt=releaseSelect.options[releaseSelect.selectedIndex];
+        var tag=opt?opt.dataset.tag:'';
+        if(!tag)return '';
+        return '<div style="margin-top:16px"><a class="check-files-link" href="/release/'+encodeURIComponent(tag)+'" target="_blank" rel="noopener">✓ Check uploaded files →</a></div>';
+      }
+
       function refreshFinalSummary(){
         var total=files.length;
         var ok=files.filter(function(x){return x.lastResult&&x.lastResult.ok}).length;
@@ -890,18 +929,20 @@ app.get('/admin', async (_req, res) => {
         var rows=files.map(function(x){
           if(!x.lastResult)return '<span class="result-line">⏳ '+safeHtml(x.name)+' — <span class="muted">pending</span></span>';
           if(x.lastResult.ok)return '<span class="result-line">✓ '+safeHtml(x.name)+'</span>';
-          if(x.lastResult.cancelled)return '<span class="result-line">✕ '+safeHtml(x.name)+' — <span class="upload-cancelled">Cancelled</span></span>';
+          if(x.lastResult.cancelled)return '<span class="result-line">✕ '+safeHtml(x.name)+' — <span class="upload-cancelled">Cancelled</span> <button class="retry-btn" type="button" data-retry="'+files.indexOf(x)+'">🔄 Retry</button></span>';
           return '<span class="result-line">✗ '+safeHtml(x.name)+' — <span class="upload-failed">'+safeHtml(x.lastResult.error||'failed')+'</span> <button class="retry-btn" type="button" data-retry="'+files.indexOf(x)+'">🔄 Retry</button></span>';
         }).join('');
         var headTone=failed?'error':'success';
-        statusBox.innerHTML='<div class="notice status '+headTone+'"><b>Summary: '+ok+'/'+total+' uploaded'+(cancelled?(' · '+cancelled+' cancelled'):'')+(failed?(' · '+failed+' failed'):'')+'</b><br>'+rows+'</div>';
+        var link='';
+        if(ok>0)link=releaseLink();
+        statusBox.innerHTML='<div class="notice status '+headTone+'"><b>Summary: '+ok+'/'+total+' uploaded'+(cancelled?(' · '+cancelled+' cancelled'):'')+(failed?(' · '+failed+' failed'):'')+'</b><br>'+rows+link+'</div>';
       }
 
       uploadBtn.onclick=async function(){
         var key=keyInput.value.trim();
         if(!key)return statusBox.textContent='Admin key required.';
         if(!files.length)return statusBox.textContent='Select at least one file.';
-        if(!document.getElementById('releaseId').value)return statusBox.textContent='No release selected. Create one from home page first.';
+        if(!releaseSelect.value)return statusBox.textContent='No release selected. Create one from home page first.';
         localStorage.setItem('release_admin_key',key);keyBox.style.display='none';uploadBtn.disabled=true;
         activeUploads={};
         for(var i=0;i<files.length;i++){files[i].lastResult=null}
@@ -967,15 +1008,18 @@ app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) =>
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file was uploaded.' });
     if (!req.body.release_id) return res.status(400).json({ ok: false, error: 'release_id is required.' });
-    // multer gives originalname already decoded as UTF-8 from the multipart field.
-    // safeName keeps all language characters, strips only path separators/control chars.
-    let name = safeName(req.file.originalname);
+
+    // Fix multer's latin1 → UTF-8 mojibake for Bengali / any non-ASCII filename
+    const decodedName = fixOriginalName(req.file.originalname);
+    let name = safeName(decodedName);
     if (!name) name = 'file';
+
     const existing = await githubApi(`/repos/${REPO}/releases/${encodeURIComponent(req.body.release_id)}/assets`);
     const ext = path.extname(name);
     const base = ext ? name.slice(0, name.length - ext.length) : name;
     let counter = 1;
     while (existing.some(asset => asset.name === name)) name = `${base}-${counter++}${ext}`;
+
     const result = await uploadAsset(req.body.release_id, name, req.file.mimetype, filePath, req.file.size);
     if (!result.ok) {
       const ghMsg = result.data?.message || `GitHub upload failed (${result.status}).`;
