@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const https = require('https');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -11,18 +12,23 @@ const REPO = process.env.REPO_FULL_NAME || 'nusratbytxrs/release-hosting';
 const SITE_NAME = process.env.SITE_NAME || 'Release Hosting';
 const TOKEN = process.env.GITHUB_TOKEN || '';
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
+const IS_PROD = process.env.NODE_ENV === 'production';
 const MAX_MB = Math.max(1, Number(process.env.MAX_UPLOAD_MB || 100));
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-hosting-'));
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, tempDir),
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}-${path.basename(file.originalname)}`)
   }),
   limits: { fileSize: MAX_MB * 1024 * 1024 }
+  // No fileFilter → all file types supported
 });
+
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json({ limit: '2mb' }));
 
+/* ============ helpers ============ */
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 const safeName = value => { const name = path.basename(String(value || '')).replace(/[\\/]/g, '-').trim(); return name && name !== '.' && name !== '..' ? name : ''; };
 const extension = name => path.extname(String(name || '')).toLowerCase();
@@ -37,15 +43,56 @@ const preserveExtension = (newName, oldName) => {
   }
   return clean;
 };
-const requestKey = req => req.headers['x-admin-key'] || req.query.key || req.body?.key || '';
-function requireAdmin(req, res, next) { if (!ADMIN_KEY) return res.status(500).json({ ok: false, error: 'ADMIN_KEY is not configured.' }); if (requestKey(req) !== ADMIN_KEY) return res.status(401).json({ ok: false, error: 'Invalid admin key.' }); next(); }
 
+/* ============ timing-safe compare ============ */
+function safeEqual(a, b) {
+  const A = Buffer.from(String(a ?? ''));
+  const B = Buffer.from(String(b ?? ''));
+  if (A.length !== B.length) return false;
+  try { return crypto.timingSafeEqual(A, B); } catch { return false; }
+}
+
+/* ============ admin key ONLY from header ============ */
+const requestKey = req => req.headers['x-admin-key'] || '';
+function requireAdmin(req, res, next) {
+  if (!ADMIN_KEY) return res.status(500).json({ ok: false, error: 'ADMIN_KEY is not configured.' });
+  if (!safeEqual(requestKey(req), ADMIN_KEY)) return res.status(401).json({ ok: false, error: 'Invalid admin key.' });
+  next();
+}
+
+/* ============ error sanitizer ============ */
+function sendError(res, err, fallbackStatus = 500, fallbackMsg = 'Something went wrong.') {
+  const status = Number.isInteger(err?.status) ? err.status : fallbackStatus;
+  const message = err?.message || 'Unknown error';
+  // Always log full detail server-side
+  console.error(`[ERROR] ${req2LogPath(res)} ${status}: ${message}`, err?.stack || '');
+  if (IS_PROD) return res.status(status).json({ ok: false, error: status >= 500 ? fallbackMsg : message });
+  return res.status(status).json({ ok: false, error: message });
+}
+function req2LogPath(res) { return res.req?.path || '-'; }
+
+/* ============ GitHub API ============ */
 async function githubApi(apiPath, options = {}) {
   if (!TOKEN) throw new Error('GITHUB_TOKEN is not configured.');
-  const response = await fetch(`https://api.github.com${apiPath}`, { ...options, headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${TOKEN}`, 'X-GitHub-Api-Version': '2022-11-28', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) } });
-  const text = await response.text(); let data = {};
+  const response = await fetch(`https://api.github.com${apiPath}`, {
+    ...options,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${TOKEN}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {})
+    }
+  });
+  const text = await response.text();
+  let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text }; }
-  if (!response.ok) { const error = new Error(data.message || `GitHub API returned ${response.status}`); error.status = response.status; error.github = data; throw error; }
+  if (!response.ok) {
+    const error = new Error(data.message || `GitHub API returned ${response.status}`);
+    error.status = response.status;
+    error.github = data;
+    throw error;
+  }
   return data;
 }
 const getReleases = () => githubApi(`/repos/${REPO}/releases?per_page=100`);
@@ -54,15 +101,37 @@ const getReleaseById = id => githubApi(`/repos/${REPO}/releases/${encodeURICompo
 
 function uploadAsset(releaseId, filename, type, filePath, size) {
   return new Promise((resolve, reject) => {
-    const req = https.request({ hostname: 'uploads.github.com', method: 'POST', path: `/repos/${REPO}/releases/${encodeURIComponent(releaseId)}/assets?name=${encodeURIComponent(filename)}`, headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${TOKEN}`, 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': type || 'application/octet-stream', 'Content-Length': String(size), Connection: 'close' }, timeout: 30 * 60 * 1000 }, response => {
-      const chunks = []; response.on('data', chunk => chunks.push(chunk)); response.on('end', () => { let data = {}; try { data = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch {} resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode || 500, data }); });
+    const req = https.request({
+      hostname: 'uploads.github.com',
+      method: 'POST',
+      path: `/repos/${REPO}/releases/${encodeURIComponent(releaseId)}/assets?name=${encodeURIComponent(filename)}`,
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${TOKEN}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': type || 'application/octet-stream',
+        'Content-Length': String(size),
+        Connection: 'close'
+      },
+      timeout: 30 * 60 * 1000
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => {
+        let data = {};
+        try { data = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch {}
+        resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, status: response.statusCode || 500, data });
+      });
     });
-    req.on('timeout', () => req.destroy(new Error('GitHub upload timed out.'))); req.on('error', reject);
-    const stream = fs.createReadStream(filePath); stream.on('error', error => { req.destroy(); reject(error); }); stream.pipe(req);
+    req.on('timeout', () => req.destroy(new Error('GitHub upload timed out.')));
+    req.on('error', reject);
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', error => { req.destroy(); reject(error); });
+    stream.pipe(req);
   });
 }
 
-/* ============ POLISHED CSS ============ */
+/* ============ CSS ============ */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 :root{--bg:#07080d;--bg-2:#0d0f17;--surface:rgba(20,23,33,.72);--surface-2:rgba(28,32,46,.6);--surface-solid:#141721;--text:#eef2f9;--muted:#8b95a7;--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--accent:#7c5cff;--accent-2:#4f9cff;--good:#22d39d;--info:#69b7ff;--warn:#ffb84d;--danger:#ff5f7e;--shadow-lg:0 25px 60px -20px rgba(0,0,0,.7);--shadow-md:0 12px 32px -12px rgba(0,0,0,.55);--radius:16px;--radius-sm:11px}
@@ -208,6 +277,7 @@ applyTheme();
 document.getElementById('themeBtn').onclick=function(){localStorage.setItem('release_theme',document.body.classList.contains('light')?'dark':'light');applyTheme()};
 function showToast(msg,isError){var t=document.getElementById('toast');t.textContent=msg;t.classList.toggle('error',!!isError);t.classList.add('show');clearTimeout(t._timer);t._timer=setTimeout(function(){t.classList.remove('show')},2800)}
 function humanSize(b){b=Number(b||0);if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';if(b<1073741824)return (b/1048576).toFixed(2)+' MB';return (b/1073741824).toFixed(2)+' GB'}
+function safeText(v){return String(v==null?'':v)}
 ${script}
 </script></body></html>`;
 }
@@ -403,7 +473,7 @@ app.get('/', async (_req, res) => {
       };
     `;
     res.send(page('Releases', body, script));
-  } catch (e) { res.status(500).send(page('Error', `<div class="notice error">${esc(e.message)}</div>`)); }
+  } catch (e) { sendError(res, e, 500, 'Could not load releases.'); }
 });
 
 /* ============ RELEASE PAGE ============ */
@@ -488,14 +558,22 @@ app.get('/release/:tag', async (req, res) => {
       var savedSort=localStorage.getItem('release_sort_pref');
       if(savedSort==='newest'||savedSort==='oldest'){sort.value=savedSort}
       function adminKey(){var k=localStorage.getItem('release_admin_key')||prompt('Enter admin key');if(k)localStorage.setItem('release_admin_key',k);return k||''}
-      function msg(text,good){status.innerHTML='<div class="notice status '+(good===false?'error':'success')+'">'+text+'</div>'}
+
+      // XSS-safe message render
+      function msg(text,good){
+        status.innerHTML='';
+        var div=document.createElement('div');
+        div.className='notice status '+(good===false?'error':'success');
+        div.textContent=text;
+        status.appendChild(div);
+      }
+
       function reorder(){Array.from(files.querySelectorAll('[data-asset]')).sort(function(a,b){var d=new Date(a.dataset.created)-new Date(b.dataset.created);return sort.value==='oldest'?d:-d}).forEach(function(x){files.appendChild(x)})}
       function filterFiles(){var v=fileSearch.value.toLowerCase();files.querySelectorAll('[data-asset]').forEach(function(x){x.style.display=x.innerText.toLowerCase().includes(v)?'':'none'})}
       sort.onchange=function(){localStorage.setItem('release_sort_pref',sort.value);reorder()};
       fileSearch.oninput=filterFiles;
       reorder();filterFiles();
 
-      // ---------- Smart Select-All button ----------
       function refreshSelectAllLabel(){
         var cbs=Array.from(files.querySelectorAll('[data-check]'));
         if(!cbs.length){selectAllBtn.style.display='none';return}
@@ -505,7 +583,6 @@ app.get('/release/:tag', async (req, res) => {
         else if(checked===cbs.length){selectAllBtn.textContent='🔲 Select none'}
         else{selectAllBtn.textContent='🔲 Deselect all'}
       }
-
       function updateBulk(){
         var checks=files.querySelectorAll('[data-check]:checked');
         bulkCount.textContent=checks.length+' selected';
@@ -514,7 +591,6 @@ app.get('/release/:tag', async (req, res) => {
         refreshSelectAllLabel();
       }
       files.addEventListener('change',function(e){if(e.target.matches('[data-check]'))updateBulk()});
-
       selectAllBtn.onclick=function(){
         var cbs=Array.from(files.querySelectorAll('[data-check]'));
         if(!cbs.length)return;
@@ -557,9 +633,8 @@ app.get('/release/:tag', async (req, res) => {
           confirmYes.disabled=false;
           confirmModal.classList.remove('show');
           updateBulk();
-          if(failed===0)showToast('✓ '+selected.length+' file(s) deleted.');
-          else showToast('⚠ '+failed+' of '+selected.length+' failed.',true);
-          msg(failed===0?'✓ '+selected.length+' file(s) deleted.':('⚠ '+failed+' file(s) could not be deleted.'),failed===0);
+          if(failed===0){showToast('✓ '+selected.length+' file(s) deleted.');msg('✓ '+selected.length+' file(s) deleted.',true)}
+          else{showToast('⚠ '+failed+' of '+selected.length+' failed.',true);msg('⚠ '+failed+' file(s) could not be deleted.',false)}
         };
       };
       document.addEventListener('click',function(e){if(e.target.closest('[data-close-modal]')||e.target===confirmModal)confirmModal.classList.remove('show')});
@@ -589,24 +664,24 @@ app.get('/release/:tag', async (req, res) => {
               var d=await r.json();
               if(!r.ok||!d.ok)throw Error(d.error||'Rename failed');
               card.querySelector('.asset-name').textContent=d.asset.name;
-              msg('✓ File renamed successfully.');showToast('✓ File renamed successfully.');
+              msg('✓ File renamed successfully.',true);showToast('✓ File renamed successfully.');
             }catch(x){msg(x.message,false);showToast(x.message,true)}
           }else{
             if(!confirm('Delete '+name+' permanently?'))return;
             var r=await fetch('/api/assets/'+id,{method:'DELETE',headers:{'x-admin-key':key}}),d=await r.json();
             if(!r.ok||!d.ok){msg(d.error||'Delete failed',false);showToast(d.error||'Delete failed',true);return}
-            card.remove();msg('✓ File deleted successfully.');showToast('✓ File deleted successfully.');
+            card.remove();msg('✓ File deleted successfully.',true);showToast('✓ File deleted successfully.');
             updateBulk();
           }
           return;
         }
         var url=card.dataset.url,label=button.dataset.action==='view'?'Direct view link':'Direct download link';
-        try{await navigator.clipboard.writeText(url);msg('✓ '+label+' copied.');showToast('✓ '+label+' copied to clipboard.')}
+        try{await navigator.clipboard.writeText(url);msg('✓ '+label+' copied.',true);showToast('✓ '+label+' copied to clipboard.')}
         catch{prompt('Copy this link:',url);showToast('⚠ Clipboard blocked — copy manually.',true)}
       });
     `;
     res.send(page(release.name || release.tag_name, body, script));
-  } catch (e) { res.status(e.status || 500).send(page('Error', `<div class="notice error">${esc(e.message)}</div>`)); }
+  } catch (e) { sendError(res, e, 500, 'Could not load this release.'); }
 });
 
 /* ============ ADMIN UPLOAD PAGE ============ */
@@ -618,13 +693,13 @@ app.get('/admin', async (_req, res) => {
       <section class="hero">
         <div class="hero-left">
           <h1>Upload files</h1>
-          <p class="muted">Rename selected files before uploading. File extensions are protected and never editable.</p>
+          <p class="muted">Rename selected files before uploading. File extensions are protected and never editable. All file types are supported.</p>
         </div>
       </section>
       <div class="card">
         <div class="form-group" id="keyBox"><label>Admin key</label><input id="adminKey" type="password" placeholder="Enter your admin key"></div>
         <div class="form-group"><label>Destination release</label><select id="releaseId">${options || '<option value="">No releases found</option>'}</select></div>
-        <div class="form-group"><label>Select files <span class="muted">(each up to ${MAX_MB} MB)</span></label><input id="file" class="file-input" type="file" multiple><div id="selected" class="selected-list"></div></div>
+        <div class="form-group"><label>Select files <span class="muted">(each up to ${MAX_MB} MB · any file type)</span></label><input id="file" class="file-input" type="file" multiple><div id="selected" class="selected-list"></div></div>
         <button class="btn primary" id="uploadBtn" type="button">Upload selected files ↥</button>
         <div id="status"></div>
       </div>
@@ -660,9 +735,9 @@ app.get('/admin', async (_req, res) => {
         q.send(form)})}
       uploadBtn.onclick=async function(){
         var key=keyInput.value.trim();
-        if(!key)return statusBox.innerHTML='<div class="notice status error">Admin key required.</div>';
-        if(!files.length)return statusBox.innerHTML='<div class="notice status error">Select at least one file.</div>';
-        if(!document.getElementById('releaseId').value)return statusBox.innerHTML='<div class="notice status error">No release selected. Create one from home page first.</div>';
+        if(!key)return statusBox.textContent='Admin key required.';
+        if(!files.length)return statusBox.textContent='Select at least one file.';
+        if(!document.getElementById('releaseId').value)return statusBox.textContent='No release selected. Create one from home page first.';
         localStorage.setItem('release_admin_key',key);keyBox.style.display='none';uploadBtn.disabled=true;
         var results=[];for(var i=0;i<files.length;i++)results.push(await one(files[i],i+1,files.length));
         var bad=results.filter(function(x){return!x.ok});
@@ -674,13 +749,13 @@ app.get('/admin', async (_req, res) => {
       };
     `;
     res.send(page('Admin', body, script));
-  } catch (e) { res.status(500).send(page('Admin Error', `<div class="notice error">${esc(e.message)}</div>`)); }
+  } catch (e) { sendError(res, e, 500, 'Could not load admin page.'); }
 });
 
 /* ============ RELEASE APIs ============ */
 app.get('/api/releases/:id', async (req, res) => {
   try { const release = await getReleaseById(req.params.id); res.json({ ok: true, release }); }
-  catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+  catch (e) { sendError(res, e, 500, 'Could not load release.'); }
 });
 
 app.post('/api/releases', requireAdmin, async (req, res) => {
@@ -691,7 +766,7 @@ app.post('/api/releases', requireAdmin, async (req, res) => {
     if (target_commitish) payload.target_commitish = String(target_commitish).trim();
     const release = await githubApi(`/repos/${REPO}/releases`, { method: 'POST', body: JSON.stringify(payload) });
     res.json({ ok: true, release });
-  } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+  } catch (e) { sendError(res, e, 500, 'Could not create release.'); }
 });
 
 app.patch('/api/releases/:id', requireAdmin, async (req, res) => {
@@ -704,17 +779,18 @@ app.patch('/api/releases/:id', requireAdmin, async (req, res) => {
     if (!Object.keys(payload).length) return res.status(400).json({ ok: false, error: 'Nothing to update.' });
     const release = await githubApi(`/repos/${REPO}/releases/${encodeURIComponent(req.params.id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
     res.json({ ok: true, release });
-  } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+  } catch (e) { sendError(res, e, 500, 'Could not update release.'); }
 });
 
 app.delete('/api/releases/:id', requireAdmin, async (req, res) => {
   try { await githubApi(`/repos/${REPO}/releases/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' }); res.json({ ok: true }); }
-  catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+  catch (e) { sendError(res, e, 500, 'Could not delete release.'); }
 });
 
 /* ============ ASSET APIs ============ */
 app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) => {
-  const file = req.file?.path;
+  const filePath = req.file?.path;
+  const cleanup = () => { if (filePath) fs.promises.unlink(filePath).catch(() => {}); };
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file was uploaded.' });
     if (!req.body.release_id) return res.status(400).json({ ok: false, error: 'release_id is required.' });
@@ -723,11 +799,16 @@ app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) =>
     const ext = path.extname(name); const base = path.basename(name, ext);
     let counter = 1;
     while (existing.some(asset => asset.name === name)) name = `${base}-${counter++}${ext}`;
-    const result = await uploadAsset(req.body.release_id, name, req.file.mimetype, file, req.file.size);
-    if (!result.ok) return res.status(result.status).json({ ok: false, error: result.data?.message || `GitHub upload failed (${result.status}).` });
+    // Any file type supported — no MIME filter, uses whatever browser reported
+    const result = await uploadAsset(req.body.release_id, name, req.file.mimetype, filePath, req.file.size);
+    if (!result.ok) {
+      const ghMsg = result.data?.message || `GitHub upload failed (${result.status}).`;
+      const err = new Error(ghMsg); err.status = result.status;
+      return sendError(res, err, result.status, 'Upload failed.');
+    }
     res.json({ ok: true, asset: result.data });
-  } catch (e) { res.status(e.status || 502).json({ ok: false, error: e.message }); }
-  finally { if (file) fs.promises.unlink(file).catch(() => {}); }
+  } catch (e) { sendError(res, e, 502, 'Upload failed.'); }
+  finally { cleanup(); }
 });
 
 app.patch('/api/assets/:id', requireAdmin, async (req, res) => {
@@ -738,14 +819,28 @@ app.patch('/api/assets/:id', requireAdmin, async (req, res) => {
     if (name === current.name) return res.status(400).json({ ok: false, error: 'New name is the same as the old one.' });
     const asset = await githubApi(`/repos/${REPO}/releases/assets/${encodeURIComponent(req.params.id)}`, { method: 'PATCH', body: JSON.stringify({ name }) });
     res.json({ ok: true, asset });
-  } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+  } catch (e) { sendError(res, e, 500, 'Could not rename file.'); }
 });
 
 app.delete('/api/assets/:id', requireAdmin, async (req, res) => {
   try { await githubApi(`/repos/${REPO}/releases/assets/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' }); res.json({ ok: true }); }
-  catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+  catch (e) { sendError(res, e, 500, 'Could not delete file.'); }
 });
 
-app.get('/health', (_req, res) => res.type('text').send('ok'));
-app.use((error, _req, res, _next) => res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 500).json({ ok: false, error: error.code === 'LIMIT_FILE_SIZE' ? `File is too large. Maximum allowed size is ${MAX_MB} MB.` : error.message }));
+app.get('/health', (_req, res) => res.json({ ok: true, status: 'ok', uptime: process.uptime() }));
+
+/* ============ Global error handler (cleanup temp file on multer size error) ============ */
+app.use((error, req, res, _next) => {
+  if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+  if (error?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ ok: false, error: `File is too large. Maximum allowed size is ${MAX_MB} MB.` });
+  console.error('[UNHANDLED]', error);
+  res.status(500).json({ ok: false, error: IS_PROD ? 'Something went wrong.' : (error?.message || 'Unknown error') });
+});
+
+/* ============ Temp dir cleanup on exit ============ */
+function cleanupTempDir() { try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {} }
+process.on('SIGINT', () => { cleanupTempDir(); process.exit(0); });
+process.on('SIGTERM', () => { cleanupTempDir(); process.exit(0); });
+process.on('exit', cleanupTempDir);
+
 app.listen(PORT, '0.0.0.0', () => console.log(`${SITE_NAME} running on port ${PORT}`));
