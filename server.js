@@ -19,7 +19,11 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-hosting-'));
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, tempDir),
-    filename: (_req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}-${path.basename(file.originalname)}`)
+    filename: (_req, file, cb) => {
+      // Store with a safe ASCII-only temp name; original name kept in memory by multer (file.originalname)
+      const rand = Math.random().toString(36).slice(2);
+      cb(null, `${Date.now()}-${rand}.tmp`);
+    }
   }),
   limits: { fileSize: MAX_MB * 1024 * 1024 }
 });
@@ -29,14 +33,43 @@ app.use(express.json({ limit: '2mb' }));
 
 /* ============ helpers ============ */
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-const safeName = value => { const name = path.basename(String(value || '')).replace(/[\\/]/g, '-').trim(); return name && name !== '.' && name !== '..' ? name : ''; };
-const extension = name => path.extname(String(name || '')).toLowerCase();
+
+/**
+ * safeName — keeps any-language characters (Bengali, Arabic, Chinese, emoji, etc.)
+ * but strips path separators and dangerous control chars.
+ * Multer gives originalname already decoded as UTF-8; we just clean it.
+ */
+const safeName = value => {
+  let name = String(value || '');
+  // Remove any path components (/, \, leading dirs)
+  name = name.replace(/[\\/]+/g, '-');
+  // Remove control chars and null bytes
+  name = name.replace(/[\u0000-\u001F\u007F]/g, '');
+  // Remove leading/trailing dots-only & whitespace
+  name = name.replace(/^[.\s]+|[.\s]+$/g, '').trim();
+  if (!name || name === '.' || name === '..') return '';
+  // Limit total length (filesystem + GitHub limit safety)
+  if ([...name].length > 200) {
+    const ext = path.extname(name);
+    const base = path.basename(name, ext);
+    name = [...base].slice(0, Math.max(1, 200 - ext.length)).join('') + ext;
+  }
+  return name;
+};
+
+const extension = name => {
+  const n = String(name || '');
+  const i = n.lastIndexOf('.');
+  return i > 0 ? n.slice(i).toLowerCase() : '';
+};
+
 const preserveExtension = (newName, oldName) => {
   const oldExt = extension(oldName);
   let clean = safeName(newName);
   if (!clean) return '';
   if (oldExt) {
-    clean = clean.replace(/\.[^/.]+$/, '').trim();
+    // strip any extension user typed then append original
+    clean = clean.replace(/\.[^./\\]+$/, '').trim();
     if (!clean) return '';
     return clean + oldExt;
   }
@@ -97,6 +130,7 @@ const getReleaseById = id => githubApi(`/repos/${REPO}/releases/${encodeURICompo
 
 function uploadAsset(releaseId, filename, type, filePath, size) {
   return new Promise((resolve, reject) => {
+    // encodeURIComponent handles any Unicode filename correctly in the query string
     const req = https.request({
       hostname: 'uploads.github.com',
       method: 'POST',
@@ -134,7 +168,7 @@ const CSS = `
 body.light{--bg:#eef2f9;--bg-2:#e6ebf4;--surface:rgba(255,255,255,.85);--surface-2:rgba(255,255,255,.6);--surface-solid:#ffffff;--text:#0e1420;--muted:#5c6678;--line:rgba(10,20,40,.08);--line-strong:rgba(10,20,40,.16);--shadow-lg:0 25px 60px -25px rgba(30,50,90,.25);--shadow-md:0 12px 32px -14px rgba(30,50,90,.2)}
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;font-family:'Inter',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;font-feature-settings:'cv02','cv03','cv04','cv11';color:var(--text);background:radial-gradient(1200px 600px at 10% -10%,rgba(124,92,255,.18),transparent 60%),radial-gradient(900px 500px at 100% 0%,rgba(79,156,255,.14),transparent 55%),linear-gradient(180deg,var(--bg) 0%,var(--bg-2) 100%);background-attachment:fixed;min-height:100vh;-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+body{margin:0;font-family:'Inter',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;font-feature-settings:'cv02','cv03','cv04','cv11';color:var(--text);background:radial-gradient(1200px 600px at 10% -10%,rgba(124,92,255,.18),transparent 60%),radial-gradient(900px 500px at 100% 0%,rgba(79,156,255,.14),transparent 55%),linear-gradient(180deg,var(--bg) 0%,var(--bg-2) 100%);background-attachment:fixed;min-height:100vh;-webkit-font-smoothing:antialiased;letter-spacing:-.01em;word-break:break-word}
 a{color:inherit;text-decoration:none}
 button{font-family:inherit}
 .container{width:min(1180px,calc(100% - 32px));margin:auto}
@@ -157,33 +191,33 @@ header{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 7
 main{padding:36px 0 80px}
 .hero{padding:34px 0 22px;display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;justify-content:space-between}
 .hero-left{flex:1;min-width:260px}
-.hero h1{font-size:clamp(30px,5vw,56px);font-weight:900;letter-spacing:-.035em;line-height:1.05;margin:0 0 12px;background:linear-gradient(135deg,var(--text) 0%,color-mix(in srgb,var(--text) 55%,var(--accent)) 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero h1{font-size:clamp(30px,5vw,56px);font-weight:900;letter-spacing:-.035em;line-height:1.05;margin:0 0 12px;background:linear-gradient(135deg,var(--text) 0%,color-mix(in srgb,var(--text) 55%,var(--accent)) 100%);-webkit-background-clip:text;background-clip:text;color:transparent;word-break:break-word}
 .hero p{max-width:640px;font-size:16px;line-height:1.6;margin:0}
 .muted{color:var(--muted)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px}
-.card,.asset{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:24px;backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);box-shadow:var(--shadow-md);transition:transform .25s cubic-bezier(.4,0,.2,1),border-color .25s,box-shadow .25s}
+.card,.asset{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:24px;backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);box-shadow:var(--shadow-md);transition:transform .25s cubic-bezier(.4,0,.2,1),border-color .25s,box-shadow .25s;min-width:0}
 .card:hover{transform:translateY(-3px);border-color:var(--line-strong);box-shadow:var(--shadow-lg)}
-.card h2{margin:0 0 10px;font-size:20px;font-weight:800;letter-spacing:-.02em;line-height:1.3}
+.card h2{margin:0 0 10px;font-size:20px;font-weight:800;letter-spacing:-.02em;line-height:1.3;word-break:break-word;overflow-wrap:anywhere}
 .card h2 a:hover{color:var(--accent)}
 .card .meta{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}
 .card-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
-.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);color:var(--muted)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip.accent{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0 26px}
 .stat{padding:18px 20px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);backdrop-filter:blur(12px);display:flex;align-items:center;gap:14px;box-shadow:var(--shadow-md)}
-.stat .icon{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:20px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 22%,transparent),color-mix(in srgb,var(--accent-2) 22%,transparent));border:1px solid var(--line-strong)}
+.stat .icon{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:20px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 22%,transparent),color-mix(in srgb,var(--accent-2) 22%,transparent));border:1px solid var(--line-strong);flex-shrink:0}
 .stat .label{font-size:12.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 .stat .value{font-size:20px;font-weight:800;letter-spacing:-.02em;margin-top:2px}
 #files{display:grid;gap:16px}
 .asset{padding:20px 22px;display:grid;gap:12px}
 .asset.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
-.asset-head{display:flex;align-items:flex-start;gap:14px;padding-right:46px}
-.asset-check{width:20px;height:20px;accent-color:var(--accent);cursor:pointer;margin-top:6px}
+.asset-head{display:flex;align-items:flex-start;gap:14px;padding-right:46px;min-width:0}
+.asset-check{width:20px;height:20px;accent-color:var(--accent);cursor:pointer;margin-top:6px;flex-shrink:0}
 .file-icon{width:46px;height:46px;border-radius:13px;flex-shrink:0;display:grid;place-items:center;font-size:22px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 22%,transparent),color-mix(in srgb,var(--accent-2) 22%,transparent));border:1px solid var(--line-strong)}
 .asset-info{min-width:0;flex:1}
-.asset-name{font-weight:700;font-size:16px;word-break:break-word;line-height:1.35;letter-spacing:-.015em}
-.asset-sub{margin-top:5px;font-size:13.5px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.asset-sub .dot{width:3px;height:3px;border-radius:50%;background:currentColor;opacity:.5;display:inline-block}
+.asset-name{font-weight:700;font-size:16px;line-height:1.35;letter-spacing:-.015em;overflow-wrap:anywhere;word-break:break-word}
+.asset-sub{margin-top:5px;font-size:13.5px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center;line-height:1.5}
+.asset-sub .dot{width:3px;height:3px;border-radius:50%;background:currentColor;opacity:.5;display:inline-block;flex-shrink:0}
 .asset-menu{position:absolute;right:16px;top:16px}
 .dots{width:38px;height:38px;padding:0;font-size:20px;line-height:1;border-radius:11px;background:var(--surface-2);border:1px solid var(--line)}
 .menu-panel{display:none;position:absolute;right:0;top:46px;z-index:20;min-width:230px;padding:7px;border:1px solid var(--line-strong);border-radius:13px;background:var(--surface-solid);box-shadow:var(--shadow-lg);animation:pop .15s ease}
@@ -194,8 +228,8 @@ main{padding:36px 0 80px}
 .menu-panel button.danger{color:var(--danger)}
 .preview{margin-top:4px}
 .preview img,.preview video{max-width:100%;max-height:420px;border-radius:13px;border:1px solid var(--line);display:block}
-.notice{padding:18px 20px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);backdrop-filter:blur(10px);margin:16px 0;line-height:1.6}
-.status{border-left:4px solid var(--info);background:linear-gradient(135deg,color-mix(in srgb,var(--info) 14%,var(--surface)),var(--surface-2));color:var(--info);font-weight:500;padding:16px 20px;border-radius:var(--radius);animation:fadeIn .25s ease}
+.notice{padding:18px 20px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);backdrop-filter:blur(10px);margin:16px 0;line-height:1.6;overflow-wrap:anywhere;word-break:break-word}
+.status{border-left:4px solid var(--info);background:linear-gradient(135deg,color-mix(in srgb,var(--info) 14%,var(--surface)),var(--surface-2));color:var(--info);font-weight:500;padding:16px 20px;border-radius:var(--radius);animation:fadeIn .25s ease;overflow-wrap:anywhere;word-break:break-word;min-width:0}
 .status.success{border-left-color:var(--good);color:var(--good);background:linear-gradient(135deg,color-mix(in srgb,var(--good) 14%,var(--surface)),var(--surface-2))}
 .status.error{border-left-color:var(--danger);color:var(--danger);background:linear-gradient(135deg,color-mix(in srgb,var(--danger) 14%,var(--surface)),var(--surface-2))}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
@@ -211,15 +245,15 @@ select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns=
 .search-wrap input{padding-left:44px}
 .selected-list{display:grid;gap:9px;margin:14px 0 20px}
 .selected-file{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:9px;align-items:center;padding:11px 14px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);animation:fadeIn .2s ease}
-.selected-file small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;font-weight:500}
-.selected-file .btn{padding:7px 11px;font-size:12.5px}
-.upload-progress-note{margin:16px 0 0;padding:16px 18px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:transparent;font-size:14px;line-height:1.75}
+.selected-file small{font-size:13.5px;font-weight:500;overflow-wrap:anywhere;word-break:break-word;line-height:1.4}
+.selected-file .btn{padding:7px 11px;font-size:12.5px;white-space:nowrap}
+.upload-progress-note{margin:16px 0 0;padding:16px 18px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:transparent;font-size:14px;line-height:1.75;overflow-wrap:anywhere;word-break:break-word;min-width:0}
 .progress{height:8px;background:color-mix(in srgb,var(--line-strong) 70%,transparent);border-radius:20px;overflow:hidden;margin-top:14px;position:relative}
 .progress-bar{height:100%;border-radius:20px;background:linear-gradient(90deg,var(--accent),var(--accent-2),var(--good));background-size:200% 100%;animation:shimmer 2s linear infinite;transition:width .2s ease}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .speed{color:var(--warn);font-weight:700;font-variant-numeric:tabular-nums}
 .uploaded{color:var(--info);font-weight:600;font-variant-numeric:tabular-nums}
-.upload-name{color:var(--text);font-weight:700}
+.upload-name{color:var(--text);font-weight:700;overflow-wrap:anywhere;word-break:break-word}
 footer{padding:38px 0;border-top:1px solid var(--line);text-align:center;color:var(--muted);font-size:14px}
 .toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:14px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:18px;backdrop-filter:blur(12px)}
 .toolbar .search-wrap{flex:1;min-width:200px}
@@ -232,18 +266,22 @@ footer{padding:38px 0;border-top:1px solid var(--line);text-align:center;color:v
 .modal-overlay.show{display:flex}
 .modal{width:min(560px,100%);max-height:90vh;overflow-y:auto;background:var(--surface-solid);border:1px solid var(--line-strong);border-radius:var(--radius);padding:26px;box-shadow:var(--shadow-lg);animation:modalIn .25s cubic-bezier(.4,0,.2,1)}
 @keyframes modalIn{from{opacity:0;transform:scale(.95) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
-.modal h3{margin:0 0 8px;font-size:22px;font-weight:800;letter-spacing:-.02em}
-.modal .sub{margin:0 0 22px;color:var(--muted);font-size:14px}
+.modal h3{margin:0 0 8px;font-size:22px;font-weight:800;letter-spacing:-.02em;word-break:break-word;overflow-wrap:anywhere}
+.modal .sub{margin:0 0 22px;color:var(--muted);font-size:14px;word-break:break-word;overflow-wrap:anywhere}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap}
 .modal-icon{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;font-size:26px;margin-bottom:14px;background:color-mix(in srgb,var(--danger) 14%,transparent);border:1px solid color-mix(in srgb,var(--danger) 40%,transparent)}
 .modal-icon.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
-/* progress with cancel button */
-.progress-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.progress-head .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
-.cancel-btn{background:color-mix(in srgb,var(--danger) 18%,transparent);border:1px solid color-mix(in srgb,var(--danger) 50%,transparent);color:var(--danger);padding:6px 12px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px}
+.progress-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.progress-head .name{flex:1;min-width:0;font-weight:700;overflow-wrap:anywhere;word-break:break-word;line-height:1.4}
+.cancel-btn{background:color-mix(in srgb,var(--danger) 18%,transparent);border:1px solid color-mix(in srgb,var(--danger) 50%,transparent);color:var(--danger);padding:6px 12px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex-shrink:0}
 .cancel-btn:hover{background:color-mix(in srgb,var(--danger) 30%,transparent);transform:scale(1.03)}
 .cancel-btn:disabled{opacity:.5;cursor:not-allowed}
+.retry-btn{background:color-mix(in srgb,var(--warn) 18%,transparent);border:1px solid color-mix(in srgb,var(--warn) 55%,transparent);color:var(--warn);padding:6px 12px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin-left:8px}
+.retry-btn:hover{background:color-mix(in srgb,var(--warn) 30%,transparent);transform:scale(1.03)}
+.retry-btn:disabled{opacity:.5;cursor:not-allowed}
 .upload-cancelled{color:var(--danger);font-weight:700}
+.upload-failed{color:var(--danger);font-weight:700}
+.result-line{display:block;padding:3px 0;overflow-wrap:anywhere;word-break:break-word}
 @media(max-width:650px){
   .selected-file{grid-template-columns:1fr auto}
   .selected-file small{grid-column:1/-1}
@@ -253,13 +291,16 @@ footer{padding:38px 0;border-top:1px solid var(--line);text-align:center;color:v
   .logo{font-size:17px}
   .modal{padding:20px}
   .asset{padding:16px}
-  .asset-head{padding-right:44px}
+  .asset-head{padding-right:44px;gap:10px}
+  .file-icon{width:40px;height:40px;font-size:19px;border-radius:11px}
+  .progress-head{flex-direction:column;align-items:stretch}
+  .cancel-btn,.retry-btn{width:100%;justify-content:center;margin-left:0;margin-top:6px}
 }
 `;
 
 const THEME_BOOT = `<script>(function(){try{var t=localStorage.getItem('release_theme');if(t==='light')document.documentElement.classList.add('light-pre');}catch(e){}})();</script>`;
 const THEME_CSS = `html.light-pre body{background:#eef2f9 !important;color:#0e1420 !important}html.light-pre header{background:rgba(238,242,249,.78) !important}`;
-const TOAST_CSS = `.toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(140%);padding:14px 24px;border-radius:14px;background:linear-gradient(135deg,var(--good),#12a37f);color:#fff;font-weight:700;font-size:14.5px;box-shadow:0 20px 50px -12px rgba(34,211,157,.5),0 8px 24px rgba(0,0,0,.4);z-index:9999;transition:transform .35s cubic-bezier(.4,0,.2,1),opacity .3s;opacity:0;pointer-events:none;max-width:90vw;text-align:center}.toast.show{transform:translateX(-50%) translateY(0);opacity:1}.toast.error{background:linear-gradient(135deg,var(--danger),#c4374a);box-shadow:0 20px 50px -12px rgba(255,95,126,.5),0 8px 24px rgba(0,0,0,.4)}`;
+const TOAST_CSS = `.toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(140%);padding:14px 24px;border-radius:14px;background:linear-gradient(135deg,var(--good),#12a37f);color:#fff;font-weight:700;font-size:14.5px;box-shadow:0 20px 50px -12px rgba(34,211,157,.5),0 8px 24px rgba(0,0,0,.4);z-index:9999;transition:transform .35s cubic-bezier(.4,0,.2,1),opacity .3s;opacity:0;pointer-events:none;max-width:90vw;text-align:center;overflow-wrap:anywhere;word-break:break-word}.toast.show{transform:translateX(-50%) translateY(0);opacity:1}.toast.error{background:linear-gradient(135deg,var(--danger),#c4374a);box-shadow:0 20px 50px -12px rgba(255,95,126,.5),0 8px 24px rgba(0,0,0,.4)}`;
 
 function page(title, body, script = '') {
   return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07080d"><title>${esc(title)} - ${esc(SITE_NAME)}</title>${THEME_BOOT}<style>${CSS}${THEME_CSS}${TOAST_CSS}</style></head><body>
@@ -285,7 +326,7 @@ ${script}
 }
 
 function fileIcon(name){
-  const ext = (name.split('.').pop() || '').toLowerCase();
+  const ext = (String(name).split('.').pop() || '').toLowerCase();
   if(['jpg','jpeg','png','gif','webp','bmp','svg','avif'].includes(ext)) return '🖼️';
   if(['mp4','webm','ogg','mov','m4v','mkv','avi'].includes(ext)) return '🎬';
   if(['mp3','wav','flac','aac','m4a','opus'].includes(ext)) return '🎵';
@@ -656,7 +697,7 @@ app.get('/release/:tag', async (req, res) => {
             var next=prompt('Rename file (extension '+ext+' stays unchanged):',base);
             if(next===null)return;
             next=next.trim();if(!next||next===base)return;
-            if(next.toLowerCase().endsWith(ext.toLowerCase()))next=next.slice(0,next.length-ext.length).trim();
+            if(ext&&next.toLowerCase().endsWith(ext.toLowerCase()))next=next.slice(0,next.length-ext.length).trim();
             if(!next)return;
             try{
               var r=await fetch('/api/assets/'+id,{method:'PATCH',headers:{'Content-Type':'application/json','x-admin-key':key},body:JSON.stringify({name:next})});
@@ -683,7 +724,7 @@ app.get('/release/:tag', async (req, res) => {
   } catch (e) { sendError(res, e, 500, 'Could not load this release.'); }
 });
 
-/* ============ ADMIN UPLOAD PAGE (with cancel button) ============ */
+/* ============ ADMIN UPLOAD PAGE ============ */
 app.get('/admin', async (_req, res) => {
   try {
     const releases = await getReleases();
@@ -692,13 +733,13 @@ app.get('/admin', async (_req, res) => {
       <section class="hero">
         <div class="hero-left">
           <h1>Upload files</h1>
-          <p class="muted">Rename selected files before uploading. File extensions are protected and never editable. All file types are supported.</p>
+          <p class="muted">Rename selected files before uploading. File extensions are protected and never editable. All file types and all languages supported.</p>
         </div>
       </section>
       <div class="card">
         <div class="form-group" id="keyBox"><label>Admin key</label><input id="adminKey" type="password" placeholder="Enter your admin key"></div>
         <div class="form-group"><label>Destination release</label><select id="releaseId">${options || '<option value="">No releases found</option>'}</select></div>
-        <div class="form-group"><label>Select files <span class="muted">(each up to ${MAX_MB} MB · any file type)</span></label><input id="file" class="file-input" type="file" multiple><div id="selected" class="selected-list"></div></div>
+        <div class="form-group"><label>Select files <span class="muted">(each up to ${MAX_MB} MB · any file type · any language)</span></label><input id="file" class="file-input" type="file" multiple><div id="selected" class="selected-list"></div></div>
         <button class="btn primary" id="uploadBtn" type="button">Upload selected files ↥</button>
         <div id="status"></div>
       </div>
@@ -710,25 +751,72 @@ app.get('/admin', async (_req, res) => {
       function safeHtml(v){return String(v).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'})[c]})}
       function stripExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(0,i):name}
       function getExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(i):''}
-      function render(){selectedBox.innerHTML=files.map(function(x,i){return '<div class="selected-file"><small title="'+safeHtml(x.name)+'">'+safeHtml(x.name)+'</small><button class="btn" type="button" data-rename="'+i+'">Rename</button><button class="btn danger" type="button" data-remove="'+i+'">Remove</button></div>'}).join('')}
-      fileInput.onchange=function(){files=Array.from(fileInput.files).map(function(file){return{file:file,name:file.name,original:file.name}});render()};
-      selectedBox.onclick=function(e){
-        var r=e.target.closest('[data-rename]'),x=e.target.closest('[data-remove]');
+      function render(){
+        selectedBox.innerHTML=files.map(function(x,i){
+          var statusTag='';
+          if(x.lastResult){
+            if(x.lastResult.ok)statusTag=' <span class="uploaded">✓ uploaded</span>';
+            else if(x.lastResult.cancelled)statusTag=' <span class="upload-cancelled">✕ cancelled</span>';
+            else statusTag=' <span class="upload-failed">✗ '+safeHtml(x.lastResult.error||'failed')+'</span>';
+          }
+          var retryBtn='';
+          if(x.lastResult&&!x.lastResult.ok&&!x.lastResult.cancelled){
+            retryBtn='<button class="btn" type="button" data-retry="'+i+'">🔄 Retry</button>';
+          }else if(x.lastResult&&x.lastResult.cancelled){
+            retryBtn='<button class="btn" type="button" data-retry="'+i+'">🔄 Retry</button>';
+          }
+          return '<div class="selected-file"><small title="'+safeHtml(x.name)+'">'+safeHtml(x.name)+statusTag+'</small>'+
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">'+retryBtn+'<button class="btn" type="button" data-rename="'+i+'">Rename</button><button class="btn danger" type="button" data-remove="'+i+'">Remove</button></div>'+
+          '</div>';
+        }).join('')
+      }
+      fileInput.onchange=function(){files=Array.from(fileInput.files).map(function(file){return{file:file,name:file.name,original:file.name,lastResult:null}});render()};
+
+      selectedBox.onclick=async function(e){
+        var r=e.target.closest('[data-rename]'),x=e.target.closest('[data-remove]'),rt=e.target.closest('[data-retry]');
         if(r){
           var i=Number(r.dataset.rename),ext=getExt(files[i].original),base=stripExt(files[i].name);
           var next=prompt('Rename file (extension '+ext+' stays unchanged):',base);
           if(next===null)return;
           next=next.trim();if(!next)return;
-          if(next.toLowerCase().endsWith(ext.toLowerCase()))next=next.slice(0,next.length-ext.length).trim();
+          if(ext&&next.toLowerCase().endsWith(ext.toLowerCase()))next=next.slice(0,next.length-ext.length).trim();
           if(!next)return;
-          files[i].name=next+ext;render();
+          files[i].name=next+ext;
+          files[i].lastResult=null;
+          render();
         }
         if(x){files.splice(Number(x.dataset.remove),1);render()}
+        if(rt){
+          var j=Number(rt.dataset.retry);
+          if(!files[j])return;
+          // If main upload is running, wait (disable button briefly)
+          if(uploadBtn.disabled){showToast('Please wait for current upload to finish.',true);return}
+          var key=keyInput.value.trim();
+          if(!key){showToast('Admin key required.',true);return}
+          if(!document.getElementById('releaseId').value){showToast('No release selected.',true);return}
+          var item=files[j];
+          item.lastResult=null;
+          render();
+          var result=await one(item,j+1,files.length);
+          item.lastResult=result;
+          render();
+          refreshFinalSummary();
+        }
       };
 
-      // Track active uploads: index -> { xhr, cancelled }
       var activeUploads={};
-      var cancelFlag={};
+
+      function renderProgressBox(index,total,item,loaded,totalBytes,speed){
+        var mb=loaded/1048576,totalMb=totalBytes/1048576;
+        statusBox.innerHTML='<div class="upload-progress-note">'+
+          '<div class="progress-head">'+
+            '<span class="name">'+index+'/'+total+' · '+safeHtml(item.name)+'</span>'+
+            '<button class="cancel-btn" type="button" data-cancel="'+index+'">✕ Cancel</button>'+
+          '</div>'+
+          '<div><span class="uploaded">Uploaded: '+mb.toFixed(1)+' MB / '+totalMb.toFixed(1)+' MB</span> · <span class="speed">'+speed.toFixed(2)+' MB/s</span></div>'+
+          '<div class="progress"><div class="progress-bar" style="width:'+((loaded/totalBytes)*100)+'%"></div></div>'+
+        '</div>';
+      }
 
       function one(item,index,total,retry){
         return new Promise(function(done){
@@ -746,15 +834,9 @@ app.get('/admin', async (_req, res) => {
           q.upload.onprogress=function(e){
             if(!e.lengthComputable)return;
             if(slot.cancelled)return;
-            var mb=e.loaded/1048576,totalMb=e.total/1048576,seconds=Math.max((performance.now()-started)/1000,.001),speed=mb/seconds;
-            statusBox.innerHTML='<div class="upload-progress-note">'+
-              '<div class="progress-head">'+
-                '<span class="name">'+index+'/'+total+' · '+safeHtml(item.name)+'</span>'+
-                '<button class="cancel-btn" type="button" data-cancel="'+index+'">✕ Cancel</button>'+
-              '</div>'+
-              '<div><span class="uploaded">Uploaded: '+mb.toFixed(1)+' MB / '+totalMb.toFixed(1)+' MB</span> · <span class="speed">'+speed.toFixed(2)+' MB/s</span></div>'+
-              '<div class="progress"><div class="progress-bar" style="width:'+(e.loaded/e.total*100)+'%"></div></div>'+
-            '</div>';
+            var seconds=Math.max((performance.now()-started)/1000,.001);
+            var speed=(e.loaded/1048576)/seconds;
+            renderProgressBox(index,total,item,e.loaded,e.total,speed);
           };
 
           q.onload=function(){
@@ -781,12 +863,10 @@ app.get('/admin', async (_req, res) => {
             done({ok:false,name:item.name,error:'Cancelled',cancelled:true});
           };
 
-          activeUploads[index].xhr=q;
           q.send(form);
         });
       }
 
-      // Cancel button handler (delegated)
       statusBox.addEventListener('click',function(e){
         var btn=e.target.closest('[data-cancel]');
         if(!btn)return;
@@ -800,6 +880,23 @@ app.get('/admin', async (_req, res) => {
         showToast('✕ Upload cancelled.',true);
       });
 
+      function refreshFinalSummary(){
+        var total=files.length;
+        var ok=files.filter(function(x){return x.lastResult&&x.lastResult.ok}).length;
+        var cancelled=files.filter(function(x){return x.lastResult&&x.lastResult.cancelled}).length;
+        var failed=files.filter(function(x){return x.lastResult&&!x.lastResult.ok&&!x.lastResult.cancelled}).length;
+        if(!total)return;
+        if(!ok&&!cancelled&&!failed)return;
+        var rows=files.map(function(x){
+          if(!x.lastResult)return '<span class="result-line">⏳ '+safeHtml(x.name)+' — <span class="muted">pending</span></span>';
+          if(x.lastResult.ok)return '<span class="result-line">✓ '+safeHtml(x.name)+'</span>';
+          if(x.lastResult.cancelled)return '<span class="result-line">✕ '+safeHtml(x.name)+' — <span class="upload-cancelled">Cancelled</span></span>';
+          return '<span class="result-line">✗ '+safeHtml(x.name)+' — <span class="upload-failed">'+safeHtml(x.lastResult.error||'failed')+'</span> <button class="retry-btn" type="button" data-retry="'+files.indexOf(x)+'">🔄 Retry</button></span>';
+        }).join('');
+        var headTone=failed?'error':'success';
+        statusBox.innerHTML='<div class="notice status '+headTone+'"><b>Summary: '+ok+'/'+total+' uploaded'+(cancelled?(' · '+cancelled+' cancelled'):'')+(failed?(' · '+failed+' failed'):'')+'</b><br>'+rows+'</div>';
+      }
+
       uploadBtn.onclick=async function(){
         var key=keyInput.value.trim();
         if(!key)return statusBox.textContent='Admin key required.';
@@ -807,31 +904,21 @@ app.get('/admin', async (_req, res) => {
         if(!document.getElementById('releaseId').value)return statusBox.textContent='No release selected. Create one from home page first.';
         localStorage.setItem('release_admin_key',key);keyBox.style.display='none';uploadBtn.disabled=true;
         activeUploads={};
-        var results=[];
-        for(var i=0;i<files.length;i++)results.push(await one(files[i],i+1,files.length));
-        var ok=results.filter(function(x){return x.ok});
-        var cancelled=results.filter(function(x){return x.cancelled});
-        var bad=results.filter(function(x){return !x.ok&&!x.cancelled});
-        var summary='<div class="notice status '+(bad.length?'error':'success')+'"><b>'+
-          (cancelled.length?('Uploaded '+ok.length+'/'+results.length+' (cancelled '+cancelled.length+')'):(bad.length?'Some files failed.':'✓ All files uploaded successfully.'))+
-          '</b><br>'+results.map(function(x){
-            if(x.ok)return '✓ '+safeHtml(x.name);
-            if(x.cancelled)return '✕ '+safeHtml(x.name)+' — <span class="upload-cancelled">Cancelled</span>';
-            return '✗ '+safeHtml(x.name)+(x.error?' — '+safeHtml(x.error):'');
-          }).join('<br>')+'</div>';
-        statusBox.innerHTML=summary;
-        if(!bad.length&&!cancelled.length)showToast('✓ All '+results.length+' file(s) uploaded successfully.');
-        else if(cancelled.length)showToast('Upload finished. '+cancelled.length+' cancelled.',true);
-        else showToast('⚠ '+bad.length+' file(s) failed.',true);
-        uploadBtn.disabled=false;
-        if(!bad.length&&!cancelled.length){fileInput.value='';files=[];render()}
-        else{
-          // Keep only failed/cancelled files so user can retry
-          var keep=[];
-          for(var j=0;j<results.length;j++){if(!results[j].ok)keep.push(files[j])}
-          files=keep;
+        for(var i=0;i<files.length;i++){files[i].lastResult=null}
+        render();
+        for(var i=0;i<files.length;i++){
+          var r=await one(files[i],i+1,files.length);
+          files[i].lastResult=r;
           render();
         }
+        refreshFinalSummary();
+        var ok=files.filter(function(x){return x.lastResult&&x.lastResult.ok}).length;
+        var cancelled=files.filter(function(x){return x.lastResult&&x.lastResult.cancelled}).length;
+        var failed=files.filter(function(x){return x.lastResult&&!x.lastResult.ok&&!x.lastResult.cancelled}).length;
+        if(!failed&&!cancelled)showToast('✓ All '+ok+' file(s) uploaded successfully.');
+        else if(cancelled)showToast('Upload finished. '+cancelled+' cancelled.',true);
+        else showToast('⚠ '+failed+' file(s) failed. Use Retry.',true);
+        uploadBtn.disabled=false;
       };
     `;
     res.send(page('Admin', body, script));
@@ -880,9 +967,13 @@ app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) =>
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file was uploaded.' });
     if (!req.body.release_id) return res.status(400).json({ ok: false, error: 'release_id is required.' });
+    // multer gives originalname already decoded as UTF-8 from the multipart field.
+    // safeName keeps all language characters, strips only path separators/control chars.
     let name = safeName(req.file.originalname);
+    if (!name) name = 'file';
     const existing = await githubApi(`/repos/${REPO}/releases/${encodeURIComponent(req.body.release_id)}/assets`);
-    const ext = path.extname(name); const base = path.basename(name, ext);
+    const ext = path.extname(name);
+    const base = ext ? name.slice(0, name.length - ext.length) : name;
     let counter = 1;
     while (existing.some(asset => asset.name === name)) name = `${base}-${counter++}${ext}`;
     const result = await uploadAsset(req.body.release_id, name, req.file.mimetype, filePath, req.file.size);
