@@ -22,7 +22,6 @@ const upload = multer({
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}-${path.basename(file.originalname)}`)
   }),
   limits: { fileSize: MAX_MB * 1024 * 1024 }
-  // No fileFilter → all file types supported
 });
 
 app.use(express.urlencoded({ extended: true }));
@@ -52,7 +51,6 @@ function safeEqual(a, b) {
   try { return crypto.timingSafeEqual(A, B); } catch { return false; }
 }
 
-/* ============ admin key ONLY from header ============ */
 const requestKey = req => req.headers['x-admin-key'] || '';
 function requireAdmin(req, res, next) {
   if (!ADMIN_KEY) return res.status(500).json({ ok: false, error: 'ADMIN_KEY is not configured.' });
@@ -64,12 +62,10 @@ function requireAdmin(req, res, next) {
 function sendError(res, err, fallbackStatus = 500, fallbackMsg = 'Something went wrong.') {
   const status = Number.isInteger(err?.status) ? err.status : fallbackStatus;
   const message = err?.message || 'Unknown error';
-  // Always log full detail server-side
-  console.error(`[ERROR] ${req2LogPath(res)} ${status}: ${message}`, err?.stack || '');
+  console.error(`[ERROR] ${res.req?.path || '-'} ${status}: ${message}`, err?.stack || '');
   if (IS_PROD) return res.status(status).json({ ok: false, error: status >= 500 ? fallbackMsg : message });
   return res.status(status).json({ ok: false, error: message });
 }
-function req2LogPath(res) { return res.req?.path || '-'; }
 
 /* ============ GitHub API ============ */
 async function githubApi(apiPath, options = {}) {
@@ -241,6 +237,13 @@ footer{padding:38px 0;border-top:1px solid var(--line);text-align:center;color:v
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap}
 .modal-icon{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;font-size:26px;margin-bottom:14px;background:color-mix(in srgb,var(--danger) 14%,transparent);border:1px solid color-mix(in srgb,var(--danger) 40%,transparent)}
 .modal-icon.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+/* progress with cancel button */
+.progress-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.progress-head .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.cancel-btn{background:color-mix(in srgb,var(--danger) 18%,transparent);border:1px solid color-mix(in srgb,var(--danger) 50%,transparent);color:var(--danger);padding:6px 12px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px}
+.cancel-btn:hover{background:color-mix(in srgb,var(--danger) 30%,transparent);transform:scale(1.03)}
+.cancel-btn:disabled{opacity:.5;cursor:not-allowed}
+.upload-cancelled{color:var(--danger);font-weight:700}
 @media(max-width:650px){
   .selected-file{grid-template-columns:1fr auto}
   .selected-file small{grid-column:1/-1}
@@ -277,7 +280,6 @@ applyTheme();
 document.getElementById('themeBtn').onclick=function(){localStorage.setItem('release_theme',document.body.classList.contains('light')?'dark':'light');applyTheme()};
 function showToast(msg,isError){var t=document.getElementById('toast');t.textContent=msg;t.classList.toggle('error',!!isError);t.classList.add('show');clearTimeout(t._timer);t._timer=setTimeout(function(){t.classList.remove('show')},2800)}
 function humanSize(b){b=Number(b||0);if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';if(b<1073741824)return (b/1048576).toFixed(2)+' MB';return (b/1073741824).toFixed(2)+' GB'}
-function safeText(v){return String(v==null?'':v)}
 ${script}
 </script></body></html>`;
 }
@@ -558,8 +560,6 @@ app.get('/release/:tag', async (req, res) => {
       var savedSort=localStorage.getItem('release_sort_pref');
       if(savedSort==='newest'||savedSort==='oldest'){sort.value=savedSort}
       function adminKey(){var k=localStorage.getItem('release_admin_key')||prompt('Enter admin key');if(k)localStorage.setItem('release_admin_key',k);return k||''}
-
-      // XSS-safe message render
       function msg(text,good){
         status.innerHTML='';
         var div=document.createElement('div');
@@ -567,7 +567,6 @@ app.get('/release/:tag', async (req, res) => {
         div.textContent=text;
         status.appendChild(div);
       }
-
       function reorder(){Array.from(files.querySelectorAll('[data-asset]')).sort(function(a,b){var d=new Date(a.dataset.created)-new Date(b.dataset.created);return sort.value==='oldest'?d:-d}).forEach(function(x){files.appendChild(x)})}
       function filterFiles(){var v=fileSearch.value.toLowerCase();files.querySelectorAll('[data-asset]').forEach(function(x){x.style.display=x.innerText.toLowerCase().includes(v)?'':'none'})}
       sort.onchange=function(){localStorage.setItem('release_sort_pref',sort.value);reorder()};
@@ -684,7 +683,7 @@ app.get('/release/:tag', async (req, res) => {
   } catch (e) { sendError(res, e, 500, 'Could not load this release.'); }
 });
 
-/* ============ ADMIN UPLOAD PAGE ============ */
+/* ============ ADMIN UPLOAD PAGE (with cancel button) ============ */
 app.get('/admin', async (_req, res) => {
   try {
     const releases = await getReleases();
@@ -726,26 +725,113 @@ app.get('/admin', async (_req, res) => {
         }
         if(x){files.splice(Number(x.dataset.remove),1);render()}
       };
-      function one(item,index,total,retry){return new Promise(function(done){retry=retry||0;var form=new FormData();form.append('release_id',document.getElementById('releaseId').value);form.append('file',item.file,item.name);var q=new XMLHttpRequest(),started=performance.now();q.open('POST','/api/upload');q.setRequestHeader('x-admin-key',keyInput.value.trim());q.timeout=30*60*1000;
-        q.upload.onprogress=function(e){if(!e.lengthComputable)return;var mb=e.loaded/1048576,totalMb=e.total/1048576,seconds=Math.max((performance.now()-started)/1000,.001),speed=mb/seconds;
-          statusBox.innerHTML='<div class="upload-progress-note"><b>'+index+'/'+total+' file uploading:</b> <span class="upload-name">'+safeHtml(item.name)+'</span><br><span class="uploaded">Uploaded: '+mb.toFixed(1)+' MB / '+totalMb.toFixed(1)+' MB</span><br><span class="speed">Speed: '+speed.toFixed(2)+' MB/s</span><div class="progress"><div class="progress-bar" style="width:'+(e.loaded/e.total*100)+'%"></div></div></div>'};
-        q.onload=function(){var d={};try{d=JSON.parse(q.responseText)}catch{}var z={ok:q.status>=200&&q.status<300&&d.ok,name:item.name,error:d.error||('Upload failed ('+q.status+')')};if(!z.ok&&retry<2&&/connection|timeout/i.test(z.error))return setTimeout(function(){one(item,index,total,retry+1).then(done)},1500*(retry+1));done(z)};
-        q.onerror=function(){if(retry<2)return setTimeout(function(){one(item,index,total,retry+1).then(done)},1500*(retry+1));done({ok:false,name:item.name,error:'Connection interrupted after retries.'})};
-        q.ontimeout=function(){done({ok:false,name:item.name,error:'Upload timed out.'})};
-        q.send(form)})}
+
+      // Track active uploads: index -> { xhr, cancelled }
+      var activeUploads={};
+      var cancelFlag={};
+
+      function one(item,index,total,retry){
+        return new Promise(function(done){
+          retry=retry||0;
+          var form=new FormData();
+          form.append('release_id',document.getElementById('releaseId').value);
+          form.append('file',item.file,item.name);
+          var q=new XMLHttpRequest(),started=performance.now();
+          var slot=activeUploads[index]={xhr:q,cancelled:false};
+
+          q.open('POST','/api/upload');
+          q.setRequestHeader('x-admin-key',keyInput.value.trim());
+          q.timeout=30*60*1000;
+
+          q.upload.onprogress=function(e){
+            if(!e.lengthComputable)return;
+            if(slot.cancelled)return;
+            var mb=e.loaded/1048576,totalMb=e.total/1048576,seconds=Math.max((performance.now()-started)/1000,.001),speed=mb/seconds;
+            statusBox.innerHTML='<div class="upload-progress-note">'+
+              '<div class="progress-head">'+
+                '<span class="name">'+index+'/'+total+' · '+safeHtml(item.name)+'</span>'+
+                '<button class="cancel-btn" type="button" data-cancel="'+index+'">✕ Cancel</button>'+
+              '</div>'+
+              '<div><span class="uploaded">Uploaded: '+mb.toFixed(1)+' MB / '+totalMb.toFixed(1)+' MB</span> · <span class="speed">'+speed.toFixed(2)+' MB/s</span></div>'+
+              '<div class="progress"><div class="progress-bar" style="width:'+(e.loaded/e.total*100)+'%"></div></div>'+
+            '</div>';
+          };
+
+          q.onload=function(){
+            delete activeUploads[index];
+            if(slot.cancelled)return done({ok:false,name:item.name,error:'Cancelled',cancelled:true});
+            var d={};try{d=JSON.parse(q.responseText)}catch{}
+            var z={ok:q.status>=200&&q.status<300&&d.ok,name:item.name,error:d.error||('Upload failed ('+q.status+')')};
+            if(!z.ok&&retry<2&&/connection|timeout/i.test(z.error))return setTimeout(function(){one(item,index,total,retry+1).then(done)},1500*(retry+1));
+            done(z);
+          };
+          q.onerror=function(){
+            delete activeUploads[index];
+            if(slot.cancelled)return done({ok:false,name:item.name,error:'Cancelled',cancelled:true});
+            if(retry<2)return setTimeout(function(){one(item,index,total,retry+1).then(done)},1500*(retry+1));
+            done({ok:false,name:item.name,error:'Connection interrupted after retries.'});
+          };
+          q.ontimeout=function(){
+            delete activeUploads[index];
+            if(slot.cancelled)return done({ok:false,name:item.name,error:'Cancelled',cancelled:true});
+            done({ok:false,name:item.name,error:'Upload timed out.'});
+          };
+          q.onabort=function(){
+            delete activeUploads[index];
+            done({ok:false,name:item.name,error:'Cancelled',cancelled:true});
+          };
+
+          activeUploads[index].xhr=q;
+          q.send(form);
+        });
+      }
+
+      // Cancel button handler (delegated)
+      statusBox.addEventListener('click',function(e){
+        var btn=e.target.closest('[data-cancel]');
+        if(!btn)return;
+        var idx=Number(btn.dataset.cancel);
+        var slot=activeUploads[idx];
+        if(!slot)return;
+        slot.cancelled=true;
+        try{slot.xhr.abort()}catch(_){}
+        btn.disabled=true;
+        btn.textContent='Cancelling...';
+        showToast('✕ Upload cancelled.',true);
+      });
+
       uploadBtn.onclick=async function(){
         var key=keyInput.value.trim();
         if(!key)return statusBox.textContent='Admin key required.';
         if(!files.length)return statusBox.textContent='Select at least one file.';
         if(!document.getElementById('releaseId').value)return statusBox.textContent='No release selected. Create one from home page first.';
         localStorage.setItem('release_admin_key',key);keyBox.style.display='none';uploadBtn.disabled=true;
-        var results=[];for(var i=0;i<files.length;i++)results.push(await one(files[i],i+1,files.length));
-        var bad=results.filter(function(x){return!x.ok});
-        statusBox.innerHTML='<div class="notice status '+(bad.length?'error':'success')+'"><b>'+(bad.length?'Some files failed.':'✓ All files uploaded successfully.')+'</b><br>'+results.map(function(x){return(x.ok?'✓ ':'✗ ')+safeHtml(x.name)+(x.error?' — '+safeHtml(x.error):'')}).join('<br>')+'</div>';
-        if(!bad.length)showToast('✓ All '+results.length+' file(s) uploaded successfully.');
+        activeUploads={};
+        var results=[];
+        for(var i=0;i<files.length;i++)results.push(await one(files[i],i+1,files.length));
+        var ok=results.filter(function(x){return x.ok});
+        var cancelled=results.filter(function(x){return x.cancelled});
+        var bad=results.filter(function(x){return !x.ok&&!x.cancelled});
+        var summary='<div class="notice status '+(bad.length?'error':'success')+'"><b>'+
+          (cancelled.length?('Uploaded '+ok.length+'/'+results.length+' (cancelled '+cancelled.length+')'):(bad.length?'Some files failed.':'✓ All files uploaded successfully.'))+
+          '</b><br>'+results.map(function(x){
+            if(x.ok)return '✓ '+safeHtml(x.name);
+            if(x.cancelled)return '✕ '+safeHtml(x.name)+' — <span class="upload-cancelled">Cancelled</span>';
+            return '✗ '+safeHtml(x.name)+(x.error?' — '+safeHtml(x.error):'');
+          }).join('<br>')+'</div>';
+        statusBox.innerHTML=summary;
+        if(!bad.length&&!cancelled.length)showToast('✓ All '+results.length+' file(s) uploaded successfully.');
+        else if(cancelled.length)showToast('Upload finished. '+cancelled.length+' cancelled.',true);
         else showToast('⚠ '+bad.length+' file(s) failed.',true);
         uploadBtn.disabled=false;
-        if(!bad.length){fileInput.value='';files=[];render()}
+        if(!bad.length&&!cancelled.length){fileInput.value='';files=[];render()}
+        else{
+          // Keep only failed/cancelled files so user can retry
+          var keep=[];
+          for(var j=0;j<results.length;j++){if(!results[j].ok)keep.push(files[j])}
+          files=keep;
+          render();
+        }
       };
     `;
     res.send(page('Admin', body, script));
@@ -799,7 +885,6 @@ app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) =>
     const ext = path.extname(name); const base = path.basename(name, ext);
     let counter = 1;
     while (existing.some(asset => asset.name === name)) name = `${base}-${counter++}${ext}`;
-    // Any file type supported — no MIME filter, uses whatever browser reported
     const result = await uploadAsset(req.body.release_id, name, req.file.mimetype, filePath, req.file.size);
     if (!result.ok) {
       const ghMsg = result.data?.message || `GitHub upload failed (${result.status}).`;
@@ -829,7 +914,6 @@ app.delete('/api/assets/:id', requireAdmin, async (req, res) => {
 
 app.get('/health', (_req, res) => res.json({ ok: true, status: 'ok', uptime: process.uptime() }));
 
-/* ============ Global error handler (cleanup temp file on multer size error) ============ */
 app.use((error, req, res, _next) => {
   if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
   if (error?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ ok: false, error: `File is too large. Maximum allowed size is ${MAX_MB} MB.` });
@@ -837,7 +921,6 @@ app.use((error, req, res, _next) => {
   res.status(500).json({ ok: false, error: IS_PROD ? 'Something went wrong.' : (error?.message || 'Unknown error') });
 });
 
-/* ============ Temp dir cleanup on exit ============ */
 function cleanupTempDir() { try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {} }
 process.on('SIGINT', () => { cleanupTempDir(); process.exit(0); });
 process.on('SIGTERM', () => { cleanupTempDir(); process.exit(0); });
