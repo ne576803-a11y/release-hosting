@@ -34,31 +34,25 @@ app.use(express.json({ limit: '2mb' }));
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
 /**
- * Fix mojibake caused by multer's latin1 decoding of UTF-8 filenames.
- * If the string contains bytes in 0x80-0xFF range that form valid UTF-8,
- * re-decode as UTF-8.
+ * Decode a multipart-supplied string that might be UTF-8 bytes
+ * misinterpreted as latin1 by some parsers.
  */
 function fixOriginalName(name) {
   if (!name) return '';
   const s = String(name);
-  // Detect whether all chars are <= 0xFF (i.e. likely latin1-decoded UTF-8)
   let allLatin1 = true;
   for (let i = 0; i < s.length; i++) {
     if (s.charCodeAt(i) > 0xFF) { allLatin1 = false; break; }
   }
-  if (!allLatin1) return s; // already has real Unicode chars, leave as-is
+  if (!allLatin1) return s;
   try {
     const buf = Buffer.from(s, 'latin1');
     const decoded = buf.toString('utf8');
-    // If decoding produced replacement chars, fall back to original
     if (decoded.includes('\uFFFD')) return s;
     return decoded;
   } catch { return s; }
 }
 
-/**
- * safeName — keeps any-language characters, strips path separators/control chars.
- */
 const safeName = value => {
   let name = String(value || '');
   name = name.replace(/[\\/]+/g, '-');
@@ -296,7 +290,6 @@ footer{padding:38px 0;border-top:1px solid var(--line);text-align:center;color:v
 .upload-cancelled{color:var(--danger);font-weight:700}
 .upload-failed{color:var(--danger);font-weight:700}
 .result-line{display:block;padding:3px 0;overflow-wrap:anywhere;word-break:break-word}
-/* check-files link under upload status */
 .check-files-link{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--accent);text-decoration:underline;text-underline-offset:4px;font-weight:700;font-size:14.5px;transition:opacity .2s}
 .check-files-link:hover{opacity:.8}
 @media(max-width:650px){
@@ -338,7 +331,7 @@ applyTheme();
 document.getElementById('themeBtn').onclick=function(){localStorage.setItem('release_theme',document.body.classList.contains('light')?'dark':'light');applyTheme()};
 function showToast(msg,isError){var t=document.getElementById('toast');t.textContent=msg;t.classList.toggle('error',!!isError);t.classList.add('show');clearTimeout(t._timer);t._timer=setTimeout(function(){t.classList.remove('show')},2800)}
 function humanSize(b){b=Number(b||0);if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';if(b<1073741824)return (b/1048576).toFixed(2)+' MB';return (b/1073741824).toFixed(2)+' GB'}
-/* Format a UTC ISO date string into the user's LOCAL date+time. */
+/* 12-hour format with AM/PM, in user's local time */
 function formatLocalDateTime(iso){
   if(!iso)return '';
   var d=new Date(iso);
@@ -346,9 +339,12 @@ function formatLocalDateTime(iso){
   var dd=String(d.getDate()).padStart(2,'0');
   var mm=String(d.getMonth()+1).padStart(2,'0');
   var yy=d.getFullYear();
-  var hh=String(d.getHours()).padStart(2,'0');
+  var h=d.getHours();
+  var ampm=h>=12?'PM':'AM';
+  var h12=h%12; if(h12===0)h12=12;
+  var hh=String(h12).padStart(2,'0');
   var mi=String(d.getMinutes()).padStart(2,'0');
-  return dd+'/'+mm+'/'+yy+' · '+hh+':'+mi;
+  return dd+'/'+mm+'/'+yy+' · '+hh+':'+mi+' '+ampm;
 }
 ${script}
 </script></body></html>`;
@@ -623,7 +619,6 @@ app.get('/release/:tag', async (req, res) => {
       </div>
     `;
     const script = `
-      // Fill in local time for every UTC timestamp
       document.querySelectorAll('[data-utc]').forEach(function(el){
         el.textContent=formatLocalDateTime(el.dataset.utc);
       });
@@ -856,6 +851,8 @@ app.get('/admin', async (_req, res) => {
           var form=new FormData();
           form.append('release_id',releaseSelect.value);
           form.append('file',item.file,item.name);
+          // Send filename in a separate field so backend always has correct UTF-8 name
+          form.append('original_filename',item.name);
           var q=new XMLHttpRequest(),started=performance.now();
           var slot=activeUploads[index]={xhr:q,cancelled:false};
 
@@ -1009,8 +1006,9 @@ app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) =>
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file was uploaded.' });
     if (!req.body.release_id) return res.status(400).json({ ok: false, error: 'release_id is required.' });
 
-    // Fix multer's latin1 → UTF-8 mojibake for Bengali / any non-ASCII filename
-    const decodedName = fixOriginalName(req.file.originalname);
+    // Prefer the client-sent original_filename (correct UTF-8), fallback to multer's
+    const rawName = req.body.original_filename || req.file.originalname || '';
+    const decodedName = fixOriginalName(rawName);
     let name = safeName(decodedName);
     if (!name) name = 'file';
 
