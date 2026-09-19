@@ -28,7 +28,6 @@ const safeName = value => { const name = path.basename(String(value || '')).repl
 const extension = name => path.extname(String(name || '')).toLowerCase();
 const preserveExtension = (newName, oldName) => {
   const oldExt = extension(oldName);
-  // Strip any extension the user typed, then append original extension
   let clean = safeName(newName);
   if (!clean) return '';
   if (oldExt) {
@@ -51,6 +50,7 @@ async function githubApi(apiPath, options = {}) {
 }
 const getReleases = () => githubApi(`/repos/${REPO}/releases?per_page=100`);
 const getReleaseByTag = tag => githubApi(`/repos/${REPO}/releases/tags/${encodeURIComponent(tag)}`);
+const getReleaseById = id => githubApi(`/repos/${REPO}/releases/${encodeURIComponent(id)}`);
 
 function uploadAsset(releaseId, filename, type, filePath, size) {
   return new Promise((resolve, reject) => {
@@ -62,368 +62,156 @@ function uploadAsset(releaseId, filename, type, filePath, size) {
   });
 }
 
-/* =========================================================
-   ============  NEW POLISHED UI (CSS)  ====================
-   ========================================================= */
+/* ============ POLISHED CSS ============ */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
-
-:root{
-  --bg:#07080d;
-  --bg-2:#0d0f17;
-  --surface:rgba(20,23,33,.72);
-  --surface-2:rgba(28,32,46,.6);
-  --surface-solid:#141721;
-  --text:#eef2f9;
-  --muted:#8b95a7;
-  --line:rgba(255,255,255,.08);
-  --line-strong:rgba(255,255,255,.14);
-  --accent:#7c5cff;
-  --accent-2:#4f9cff;
-  --good:#22d39d;
-  --info:#69b7ff;
-  --warn:#ffb84d;
-  --danger:#ff5f7e;
-  --shadow-lg:0 25px 60px -20px rgba(0,0,0,.7);
-  --shadow-md:0 12px 32px -12px rgba(0,0,0,.55);
-  --radius:16px;
-  --radius-sm:11px;
-}
-body.light{
-  --bg:#eef2f9;
-  --bg-2:#e6ebf4;
-  --surface:rgba(255,255,255,.85);
-  --surface-2:rgba(255,255,255,.6);
-  --surface-solid:#ffffff;
-  --text:#0e1420;
-  --muted:#5c6678;
-  --line:rgba(10,20,40,.08);
-  --line-strong:rgba(10,20,40,.16);
-  --shadow-lg:0 25px 60px -25px rgba(30,50,90,.25);
-  --shadow-md:0 12px 32px -14px rgba(30,50,90,.2);
-}
+:root{--bg:#07080d;--bg-2:#0d0f17;--surface:rgba(20,23,33,.72);--surface-2:rgba(28,32,46,.6);--surface-solid:#141721;--text:#eef2f9;--muted:#8b95a7;--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--accent:#7c5cff;--accent-2:#4f9cff;--good:#22d39d;--info:#69b7ff;--warn:#ffb84d;--danger:#ff5f7e;--shadow-lg:0 25px 60px -20px rgba(0,0,0,.7);--shadow-md:0 12px 32px -12px rgba(0,0,0,.55);--radius:16px;--radius-sm:11px}
+body.light{--bg:#eef2f9;--bg-2:#e6ebf4;--surface:rgba(255,255,255,.85);--surface-2:rgba(255,255,255,.6);--surface-solid:#ffffff;--text:#0e1420;--muted:#5c6678;--line:rgba(10,20,40,.08);--line-strong:rgba(10,20,40,.16);--shadow-lg:0 25px 60px -25px rgba(30,50,90,.25);--shadow-md:0 12px 32px -14px rgba(30,50,90,.2)}
 *{box-sizing:border-box}
 html,body{height:100%}
-body{
-  margin:0;
-  font-family:'Inter',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
-  font-feature-settings:'cv02','cv03','cv04','cv11';
-  color:var(--text);
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(124,92,255,.18), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(79,156,255,.14), transparent 55%),
-    linear-gradient(180deg,var(--bg) 0%,var(--bg-2) 100%);
-  background-attachment:fixed;
-  min-height:100vh;
-  -webkit-font-smoothing:antialiased;
-  letter-spacing:-.01em;
-}
+body{margin:0;font-family:'Inter',system-ui,-apple-system,'Segoe UI',Arial,sans-serif;font-feature-settings:'cv02','cv03','cv04','cv11';color:var(--text);background:radial-gradient(1200px 600px at 10% -10%,rgba(124,92,255,.18),transparent 60%),radial-gradient(900px 500px at 100% 0%,rgba(79,156,255,.14),transparent 55%),linear-gradient(180deg,var(--bg) 0%,var(--bg-2) 100%);background-attachment:fixed;min-height:100vh;-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
 a{color:inherit;text-decoration:none}
 button{font-family:inherit}
 .container{width:min(1180px,calc(100% - 32px));margin:auto}
-
-/* ===== Header ===== */
-header{
-  position:sticky;top:0;z-index:50;
-  background:color-mix(in srgb, var(--bg) 78%, transparent);
-  backdrop-filter:blur(18px) saturate(180%);
-  -webkit-backdrop-filter:blur(18px) saturate(180%);
-  border-bottom:1px solid var(--line);
-}
+header{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 78%,transparent);backdrop-filter:blur(18px) saturate(180%);-webkit-backdrop-filter:blur(18px) saturate(180%);border-bottom:1px solid var(--line)}
 .nav{min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:14px}
-.logo{
-  display:inline-flex;align-items:center;gap:10px;
-  font-weight:800;font-size:19px;letter-spacing:-.02em;
-}
-.logo .mark{
-  width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
-  background:linear-gradient(135deg,var(--accent),var(--accent-2));
-  box-shadow:0 8px 22px -8px var(--accent);
-  font-size:17px;color:#fff;
-}
+.logo{display:inline-flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.02em}
+.logo .mark{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent-2));box-shadow:0 8px 22px -8px var(--accent);font-size:17px;color:#fff}
 .nav-links{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-
-/* ===== Buttons ===== */
-.btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:8px;
-  padding:10px 16px;font-size:14px;font-weight:600;
-  border:1px solid var(--line-strong);
-  border-radius:var(--radius-sm);
-  background:var(--surface-2);
-  color:var(--text);
-  cursor:pointer;
-  transition:all .2s cubic-bezier(.4,0,.2,1);
-  white-space:nowrap;
-}
-.btn:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--accent) 60%, var(--line-strong));background:var(--surface)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 16px;font-size:14px;font-weight:600;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text);cursor:pointer;transition:all .2s cubic-bezier(.4,0,.2,1);white-space:nowrap;font-family:inherit}
+.btn:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--accent) 60%,var(--line-strong));background:var(--surface)}
 .btn:active{transform:translateY(0)}
-.btn.primary{
-  border:0;
-  background:linear-gradient(135deg,var(--accent) 0%, var(--accent-2) 100%);
-  color:#fff;
-  box-shadow:0 12px 26px -12px var(--accent);
-}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn.primary{border:0;background:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%);color:#fff;box-shadow:0 12px 26px -12px var(--accent)}
 .btn.primary:hover{box-shadow:0 16px 32px -12px var(--accent);filter:brightness(1.06)}
 .btn.danger{color:var(--danger)}
-.btn.danger:hover{border-color:color-mix(in srgb,var(--danger) 60%, transparent);background:color-mix(in srgb,var(--danger) 12%, transparent)}
-
-/* ===== Main / Hero ===== */
+.btn.danger:hover{border-color:color-mix(in srgb,var(--danger) 60%,transparent);background:color-mix(in srgb,var(--danger) 12%,transparent)}
+.btn.ghost{background:transparent}
+.btn.sm{padding:7px 12px;font-size:13px}
+.btn.icon{padding:8px;width:38px;height:38px}
 main{padding:36px 0 80px}
-.hero{padding:34px 0 26px;text-align:left}
-.hero h1{
-  font-size:clamp(34px,5.5vw,60px);
-  font-weight:900;letter-spacing:-.035em;line-height:1.05;
-  margin:0 0 14px;
-  background:linear-gradient(135deg,var(--text) 0%, color-mix(in srgb,var(--text) 55%, var(--accent)) 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-}
-.hero p{max-width:640px;font-size:16.5px;line-height:1.6}
+.hero{padding:34px 0 22px;display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;justify-content:space-between}
+.hero-left{flex:1;min-width:260px}
+.hero h1{font-size:clamp(30px,5vw,56px);font-weight:900;letter-spacing:-.035em;line-height:1.05;margin:0 0 12px;background:linear-gradient(135deg,var(--text) 0%,color-mix(in srgb,var(--text) 55%,var(--accent)) 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{max-width:640px;font-size:16px;line-height:1.6;margin:0}
 .muted{color:var(--muted)}
-
-/* ===== Cards ===== */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:20px}
-.card,.asset{
-  position:relative;
-  background:var(--surface);
-  border:1px solid var(--line);
-  border-radius:var(--radius);
-  padding:24px;
-  backdrop-filter:blur(14px) saturate(160%);
-  -webkit-backdrop-filter:blur(14px) saturate(160%);
-  box-shadow:var(--shadow-md);
-  transition:transform .25s cubic-bezier(.4,0,.2,1), border-color .25s, box-shadow .25s;
-}
+.card,.asset{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:24px;backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);box-shadow:var(--shadow-md);transition:transform .25s cubic-bezier(.4,0,.2,1),border-color .25s,box-shadow .25s}
 .card:hover{transform:translateY(-3px);border-color:var(--line-strong);box-shadow:var(--shadow-lg)}
-.card h2{
-  margin:0 0 10px;
-  font-size:20px;font-weight:800;letter-spacing:-.02em;
-  line-height:1.3;
-}
+.card h2{margin:0 0 10px;font-size:20px;font-weight:800;letter-spacing:-.02em;line-height:1.3}
 .card h2 a:hover{color:var(--accent)}
 .card .meta{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}
-.chip{
-  display:inline-flex;align-items:center;gap:6px;
-  padding:5px 11px;border-radius:999px;
-  font-size:12.5px;font-weight:600;
-  background:var(--surface-2);
-  border:1px solid var(--line);
-  color:var(--muted);
-}
-.chip svg{width:13px;height:13px}
-
-/* ===== Asset (file card) ===== */
+.card-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);color:var(--muted)}
+.chip.accent{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0 26px}
+.stat{padding:18px 20px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);backdrop-filter:blur(12px);display:flex;align-items:center;gap:14px;box-shadow:var(--shadow-md)}
+.stat .icon{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:20px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 22%,transparent),color-mix(in srgb,var(--accent-2) 22%,transparent));border:1px solid var(--line-strong)}
+.stat .label{font-size:12.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.stat .value{font-size:20px;font-weight:800;letter-spacing:-.02em;margin-top:2px}
 #files{display:grid;gap:16px}
-.asset{
-  padding:20px 22px;
-  display:grid;
-  gap:12px;
-}
+.asset{padding:20px 22px;display:grid;gap:12px}
+.asset.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
 .asset-head{display:flex;align-items:flex-start;gap:14px;padding-right:46px}
-.file-icon{
-  width:46px;height:46px;border-radius:13px;flex-shrink:0;
-  display:grid;place-items:center;font-size:22px;
-  background:linear-gradient(135deg, color-mix(in srgb,var(--accent) 22%, transparent), color-mix(in srgb,var(--accent-2) 22%, transparent));
-  border:1px solid var(--line-strong);
-}
+.asset-check{width:20px;height:20px;accent-color:var(--accent);cursor:pointer;margin-top:6px}
+.file-icon{width:46px;height:46px;border-radius:13px;flex-shrink:0;display:grid;place-items:center;font-size:22px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 22%,transparent),color-mix(in srgb,var(--accent-2) 22%,transparent));border:1px solid var(--line-strong)}
 .asset-info{min-width:0;flex:1}
-.asset-name{
-  font-weight:700;font-size:16px;word-break:break-word;line-height:1.35;
-  letter-spacing:-.015em;
-}
+.asset-name{font-weight:700;font-size:16px;word-break:break-word;line-height:1.35;letter-spacing:-.015em}
 .asset-sub{margin-top:5px;font-size:13.5px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .asset-sub .dot{width:3px;height:3px;border-radius:50%;background:currentColor;opacity:.5;display:inline-block}
-
-/* menu */
 .asset-menu{position:absolute;right:16px;top:16px}
-.dots{
-  width:38px;height:38px;padding:0;font-size:20px;line-height:1;
-  border-radius:11px;background:var(--surface-2);border:1px solid var(--line);
-}
-.dots:hover{background:var(--surface-solid)}
-.menu-panel{
-  display:none;position:absolute;right:0;top:46px;z-index:20;
-  min-width:230px;padding:7px;
-  border:1px solid var(--line-strong);
-  border-radius:13px;
-  background:var(--surface-solid);
-  box-shadow:var(--shadow-lg);
-  animation:pop .15s ease;
-}
+.dots{width:38px;height:38px;padding:0;font-size:20px;line-height:1;border-radius:11px;background:var(--surface-2);border:1px solid var(--line)}
+.menu-panel{display:none;position:absolute;right:0;top:46px;z-index:20;min-width:230px;padding:7px;border:1px solid var(--line-strong);border-radius:13px;background:var(--surface-solid);box-shadow:var(--shadow-lg);animation:pop .15s ease}
 @keyframes pop{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
 .menu-panel.open{display:grid;gap:3px}
-.menu-panel button{
-  padding:10px 12px;text-align:left;font-size:14px;font-weight:500;
-  border:0;border-radius:9px;background:transparent;color:var(--text);
-  cursor:pointer;transition:background .15s;
-  display:flex;align-items:center;gap:9px;
-}
+.menu-panel button{padding:10px 12px;text-align:left;font-size:14px;font-weight:500;border:0;border-radius:9px;background:transparent;color:var(--text);cursor:pointer;transition:background .15s;display:flex;align-items:center;gap:9px}
 .menu-panel button:hover{background:var(--surface-2)}
 .menu-panel button.danger{color:var(--danger)}
-
-/* preview */
 .preview{margin-top:4px}
-.preview img,.preview video{
-  max-width:100%;max-height:420px;border-radius:13px;
-  border:1px solid var(--line);
-  display:block;
-}
-
-/* ===== Notices & Status ===== */
-.notice{
-  padding:18px 20px;
-  border:1px solid var(--line);
-  border-radius:var(--radius);
-  background:var(--surface);
-  backdrop-filter:blur(10px);
-  margin:16px 0;
-  line-height:1.6;
-}
-.status{
-  border-left:4px solid var(--info);
-  background:linear-gradient(135deg, color-mix(in srgb,var(--info) 14%, var(--surface)), var(--surface-2));
-  color:var(--info);
-  font-weight:500;
-  padding:16px 20px;
-  border-radius:var(--radius);
-  animation:fadeIn .25s ease;
-}
-.status.success{border-left-color:var(--good);color:var(--good);background:linear-gradient(135deg, color-mix(in srgb,var(--good) 14%, var(--surface)), var(--surface-2))}
-.status.error{border-left-color:var(--danger);color:var(--danger);background:linear-gradient(135deg, color-mix(in srgb,var(--danger) 14%, var(--surface)), var(--surface-2))}
-.status b{color:inherit;font-weight:800}
+.preview img,.preview video{max-width:100%;max-height:420px;border-radius:13px;border:1px solid var(--line);display:block}
+.notice{padding:18px 20px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);backdrop-filter:blur(10px);margin:16px 0;line-height:1.6}
+.status{border-left:4px solid var(--info);background:linear-gradient(135deg,color-mix(in srgb,var(--info) 14%,var(--surface)),var(--surface-2));color:var(--info);font-weight:500;padding:16px 20px;border-radius:var(--radius);animation:fadeIn .25s ease}
+.status.success{border-left-color:var(--good);color:var(--good);background:linear-gradient(135deg,color-mix(in srgb,var(--good) 14%,var(--surface)),var(--surface-2))}
+.status.error{border-left-color:var(--danger);color:var(--danger);background:linear-gradient(135deg,color-mix(in srgb,var(--danger) 14%,var(--surface)),var(--surface-2))}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
-
-/* ===== Forms ===== */
 .form-group{margin-bottom:20px}
-.form-group label{
-  display:block;margin-bottom:9px;font-weight:600;font-size:14px;
-  letter-spacing:-.005em;
-}
-.form-group input,.form-group select,.file-input{
-  width:100%;padding:13px 15px;
-  border:1px solid var(--line-strong);
-  border-radius:var(--radius-sm);
-  background:var(--surface-2);
-  color:var(--text);
-  font-size:14.5px;font-family:inherit;
-  transition:border-color .2s, box-shadow .2s, background .2s;
-  outline:none;
-}
-.form-group input:focus,.form-group select:focus{
-  border-color:var(--accent);
-  background:var(--surface-solid);
-  box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 18%, transparent);
-}
-.form-group input::placeholder{color:var(--muted)}
+.form-group label{display:block;margin-bottom:9px;font-weight:600;font-size:14px}
+.form-group input,.form-group select,.form-group textarea,.file-input{width:100%;padding:13px 15px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text);font-size:14.5px;font-family:inherit;transition:border-color .2s,box-shadow .2s,background .2s;outline:none;resize:vertical}
+.form-group textarea{min-height:90px}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent);background:var(--surface-solid);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 18%,transparent)}
+.form-group input::placeholder,.form-group textarea::placeholder{color:var(--muted)}
 select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b95a7' stroke-width='3'><polyline points='6 9 12 15 18 9'/></svg>");background-repeat:no-repeat;background-position:right 15px center;padding-right:40px}
 .search-wrap{position:relative}
 .search-wrap svg{position:absolute;left:15px;top:50%;transform:translateY(-50%);width:17px;height:17px;color:var(--muted);pointer-events:none}
 .search-wrap input{padding-left:44px}
-
-/* selected files list */
 .selected-list{display:grid;gap:9px;margin:14px 0 20px}
-.selected-file{
-  display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:9px;
-  align-items:center;padding:11px 14px;
-  border:1px solid var(--line);
-  border-radius:11px;
-  background:var(--surface-2);
-  animation:fadeIn .2s ease;
-}
+.selected-file{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:9px;align-items:center;padding:11px 14px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);animation:fadeIn .2s ease}
 .selected-file small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;font-weight:500}
 .selected-file .btn{padding:7px 11px;font-size:12.5px}
-
-/* progress */
-.upload-progress-note{
-  margin:16px 0 0;padding:16px 18px;
-  border:1px solid var(--line-strong);
-  border-radius:var(--radius-sm);
-  background:transparent;
-  font-size:14px;line-height:1.75;
-}
-.progress{
-  height:8px;background:color-mix(in srgb,var(--line-strong) 70%, transparent);
-  border-radius:20px;overflow:hidden;margin-top:14px;
-  position:relative;
-}
-.progress-bar{
-  height:100%;border-radius:20px;
-  background:linear-gradient(90deg,var(--accent),var(--accent-2),var(--good));
-  background-size:200% 100%;
-  animation:shimmer 2s linear infinite;
-  transition:width .2s ease;
-}
+.upload-progress-note{margin:16px 0 0;padding:16px 18px;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:transparent;font-size:14px;line-height:1.75}
+.progress{height:8px;background:color-mix(in srgb,var(--line-strong) 70%,transparent);border-radius:20px;overflow:hidden;margin-top:14px;position:relative}
+.progress-bar{height:100%;border-radius:20px;background:linear-gradient(90deg,var(--accent),var(--accent-2),var(--good));background-size:200% 100%;animation:shimmer 2s linear infinite;transition:width .2s ease}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .speed{color:var(--warn);font-weight:700;font-variant-numeric:tabular-nums}
 .uploaded{color:var(--info);font-weight:600;font-variant-numeric:tabular-nums}
 .upload-name{color:var(--text);font-weight:700}
-
-/* toast */
-.toast{
-  position:fixed;bottom:32px;left:50%;
-  transform:translateX(-50%) translateY(140%);
-  padding:14px 24px;border-radius:14px;
-  background:linear-gradient(135deg,var(--good),#12a37f);
-  color:#fff;font-weight:700;font-size:14.5px;
-  box-shadow:0 20px 50px -12px rgba(34,211,157,.5), 0 8px 24px rgba(0,0,0,.4);
-  z-index:9999;
-  transition:transform .35s cubic-bezier(.4,0,.2,1), opacity .3s;
-  opacity:0;pointer-events:none;
-  max-width:90vw;text-align:center;
-}
-.toast.show{transform:translateX(-50%) translateY(0);opacity:1}
-.toast.error{background:linear-gradient(135deg,var(--danger),#c4374a);box-shadow:0 20px 50px -12px rgba(255,95,126,.5), 0 8px 24px rgba(0,0,0,.4)}
-
-/* footer */
-footer{
-  padding:38px 0;border-top:1px solid var(--line);
-  text-align:center;color:var(--muted);font-size:14px;
-}
-
-/* release toolbar */
-.toolbar{
-  display:flex;flex-wrap:wrap;gap:14px;align-items:center;
-  padding:16px 18px;
-  background:var(--surface);
-  border:1px solid var(--line);
-  border-radius:var(--radius);
-  margin-bottom:20px;
-  backdrop-filter:blur(12px);
-}
-.toolbar .search-wrap{flex:1;min-width:220px}
+footer{padding:38px 0;border-top:1px solid var(--line);text-align:center;color:var(--muted);font-size:14px}
+.toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:14px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:18px;backdrop-filter:blur(12px)}
+.toolbar .search-wrap{flex:1;min-width:200px}
 .toolbar .sort-wrap{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted)}
 .toolbar .sort-wrap select{width:auto;padding:9px 36px 9px 13px;font-size:13.5px}
-
+.bulk-bar{display:none;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 16px;border:1px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 10%,var(--surface));margin-bottom:16px;animation:fadeIn .2s ease}
+.bulk-bar.show{display:flex}
+.bulk-bar .count{font-weight:700;color:var(--accent)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;animation:fadeIn .2s ease}
+.modal-overlay.show{display:flex}
+.modal{width:min(560px,100%);max-height:90vh;overflow-y:auto;background:var(--surface-solid);border:1px solid var(--line-strong);border-radius:var(--radius);padding:26px;box-shadow:var(--shadow-lg);animation:modalIn .25s cubic-bezier(.4,0,.2,1)}
+@keyframes modalIn{from{opacity:0;transform:scale(.95) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.modal h3{margin:0 0 8px;font-size:22px;font-weight:800;letter-spacing:-.02em}
+.modal .sub{margin:0 0 22px;color:var(--muted);font-size:14px}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:22px;flex-wrap:wrap}
+.modal-icon{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;font-size:26px;margin-bottom:14px;background:color-mix(in srgb,var(--danger) 14%,transparent);border:1px solid color-mix(in srgb,var(--danger) 40%,transparent)}
+.modal-icon.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
 @media(max-width:650px){
   .selected-file{grid-template-columns:1fr auto}
   .selected-file small{grid-column:1/-1}
-  .hero h1{font-size:34px}
+  .hero h1{font-size:30px}
   .card,.asset{padding:18px}
+  .nav-links .btn{padding:9px 12px;font-size:13px}
+  .logo{font-size:17px}
+  .modal{padding:20px}
+  .asset{padding:16px}
+  .asset-head{padding-right:44px}
 }
 `;
 
+const THEME_BOOT = `<script>(function(){try{var t=localStorage.getItem('release_theme');if(t==='light')document.documentElement.classList.add('light-pre');}catch(e){}})();</script>`;
+const THEME_CSS = `html.light-pre body{background:#eef2f9 !important;color:#0e1420 !important}html.light-pre header{background:rgba(238,242,249,.78) !important}`;
+const TOAST_CSS = `.toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(140%);padding:14px 24px;border-radius:14px;background:linear-gradient(135deg,var(--good),#12a37f);color:#fff;font-weight:700;font-size:14.5px;box-shadow:0 20px 50px -12px rgba(34,211,157,.5),0 8px 24px rgba(0,0,0,.4);z-index:9999;transition:transform .35s cubic-bezier(.4,0,.2,1),opacity .3s;opacity:0;pointer-events:none;max-width:90vw;text-align:center}.toast.show{transform:translateX(-50%) translateY(0);opacity:1}.toast.error{background:linear-gradient(135deg,var(--danger),#c4374a);box-shadow:0 20px 50px -12px rgba(255,95,126,.5),0 8px 24px rgba(0,0,0,.4)}`;
+
 function page(title, body, script = '') {
-  return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07080d"><title>${esc(title)} - ${esc(SITE_NAME)}</title><style>${CSS}</style></head><body>
+  return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07080d"><title>${esc(title)} - ${esc(SITE_NAME)}</title>${THEME_BOOT}<style>${CSS}${THEME_CSS}${TOAST_CSS}</style></head><body>
 <header><div class="container nav">
   <a class="logo" href="/"><span class="mark">✦</span> ${esc(SITE_NAME)}</a>
   <div class="nav-links">
     <a class="btn" href="/">Releases</a>
     <a class="btn" href="/admin">Upload</a>
-    <button class="btn" id="themeBtn" type="button"></button>
+    <button class="btn icon" id="themeBtn" type="button" title="Toggle theme"></button>
   </div>
 </div></header>
 <main><div class="container">${body}</div></main>
 <footer>${esc(SITE_NAME)} · Fast, simple release hosting</footer>
 <div id="toast" class="toast"></div>
 <script>
-function applyTheme(){var light=localStorage.getItem('release_theme')==='light';document.body.classList.toggle('light',light);var b=document.getElementById('themeBtn');if(b)b.textContent=light?'🌙 Dark':'☀️ Light'}
+function applyTheme(){var light=localStorage.getItem('release_theme')==='light';document.body.classList.toggle('light',light);document.documentElement.classList.remove('light-pre');var b=document.getElementById('themeBtn');if(b)b.textContent=light?'🌙':'☀️'}
 applyTheme();
 document.getElementById('themeBtn').onclick=function(){localStorage.setItem('release_theme',document.body.classList.contains('light')?'dark':'light');applyTheme()};
 function showToast(msg,isError){var t=document.getElementById('toast');t.textContent=msg;t.classList.toggle('error',!!isError);t.classList.add('show');clearTimeout(t._timer);t._timer=setTimeout(function(){t.classList.remove('show')},2800)}
+function humanSize(b){b=Number(b||0);if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';if(b<1073741824)return (b/1048576).toFixed(2)+' MB';return (b/1073741824).toFixed(2)+' GB'}
 ${script}
 </script></body></html>`;
 }
 
-/* ===== file icon by extension ===== */
 function fileIcon(name){
   const ext = (name.split('.').pop() || '').toLowerCase();
   if(['jpg','jpeg','png','gif','webp','bmp','svg','avif'].includes(ext)) return '🖼️';
@@ -448,35 +236,173 @@ function humanSize(bytes){ const b = Number(bytes||0); if(b<1024) return b+' B';
 app.get('/', async (_req, res) => {
   try {
     const releases = await getReleases();
-    const cards = releases.filter(r => !r.draft).map(r => {
+    const publicReleases = releases.filter(r => !r.draft);
+    const totalFiles = publicReleases.reduce((a, r) => a + (r.assets?.length || 0), 0);
+    const totalSize = publicReleases.reduce((a, r) => a + (r.assets || []).reduce((s, x) => s + (x.size || 0), 0), 0);
+
+    const cards = publicReleases.map(r => {
       const assetCount = r.assets?.length || 0;
-      const totalSize = (r.assets || []).reduce((a, x) => a + (x.size || 0), 0);
-      return `<div class="card">
+      const relSize = (r.assets || []).reduce((a, x) => a + (x.size || 0), 0);
+      return `<div class="card" data-release-id="${r.id}">
         <h2><a href="/release/${encodeURIComponent(r.tag_name)}">${esc(r.name || r.tag_name)}</a></h2>
         <div class="meta">
-          <span class="chip">🏷️ ${esc(r.tag_name)}</span>
-          <span class="chip">📦 ${assetCount} files</span>
-          ${totalSize ? `<span class="chip">💾 ${humanSize(totalSize)}</span>` : ''}
+          <span class="chip accent">🏷️ ${esc(r.tag_name)}</span>
+          <span class="chip">📦 ${assetCount} file${assetCount !== 1 ? 's' : ''}</span>
+          ${relSize ? `<span class="chip">💾 ${humanSize(relSize)}</span>` : ''}
         </div>
-        <a class="btn primary" href="/release/${encodeURIComponent(r.tag_name)}">Explore release →</a>
+        <div class="card-actions">
+          <a class="btn primary sm" href="/release/${encodeURIComponent(r.tag_name)}">Open →</a>
+          <button class="btn sm" type="button" data-edit-release="${r.id}">✏️ Edit</button>
+          <button class="btn sm danger" type="button" data-delete-release="${r.id}">🗑️ Delete</button>
+        </div>
       </div>`;
     }).join('');
-    res.send(page('Releases', `
+
+    const body = `
       <section class="hero">
-        <h1>Share your releases<br>with style.</h1>
-        <p class="muted">Browse releases, preview media, and download files in one place.</p>
+        <div class="hero-left">
+          <h1>Share your releases<br>with style.</h1>
+          <p class="muted">Browse releases, preview media, and download files in one place.</p>
+        </div>
+        <div>
+          <button class="btn primary" id="addReleaseBtn" type="button">＋ Add release</button>
+        </div>
       </section>
+
+      <div class="stats-row">
+        <div class="stat"><div class="icon">🚀</div><div><div class="label">Releases</div><div class="value">${publicReleases.length}</div></div></div>
+        <div class="stat"><div class="icon">📦</div><div><div class="label">Total files</div><div class="value">${totalFiles}</div></div></div>
+        <div class="stat"><div class="icon">💾</div><div><div class="label">Total size</div><div class="value">${humanSize(totalSize)}</div></div></div>
+      </div>
+
       <div class="toolbar">
         <div class="search-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           <input id="search" placeholder="Search releases...">
         </div>
       </div>
-      ${cards ? `<div class="grid" id="releaseGrid">${cards}</div>` : '<div class="notice">No releases available yet.</div>'}
-    `, `
+
+      ${cards ? `<div class="grid" id="releaseGrid">${cards}</div>` : '<div class="notice">No releases available yet. Click "+ Add release" to create one.</div>'}
+
+      <div class="modal-overlay" id="releaseModal">
+        <div class="modal">
+          <h3 id="releaseModalTitle">Create release</h3>
+          <p class="sub" id="releaseModalSub">Fill in the details below. Tag must be unique.</p>
+          <input type="hidden" id="editReleaseId">
+          <div class="form-group"><label>Title</label><input id="relTitle" placeholder="e.g. My Awesome Release v1.0"></div>
+          <div class="form-group"><label>Tag / Version <span class="muted">(must be unique, e.g. v1.0.0)</span></label><input id="relTag" placeholder="v1.0.0"></div>
+          <div class="form-group"><label>Description <span class="muted">(optional)</span></label><textarea id="relDesc" placeholder="What's new in this release..."></textarea></div>
+          <div class="form-group"><label>Target branch <span class="muted">(optional, e.g. main)</span></label><input id="relBranch" placeholder="main"></div>
+          <div class="modal-actions">
+            <button class="btn" type="button" data-close-modal>Cancel</button>
+            <button class="btn primary" id="saveReleaseBtn" type="button">Save release</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay" id="confirmModal">
+        <div class="modal">
+          <div class="modal-icon">🗑️</div>
+          <h3 id="confirmTitle">Delete release?</h3>
+          <p class="sub" id="confirmSub">This action cannot be undone.</p>
+          <div class="modal-actions">
+            <button class="btn" type="button" data-close-modal>Cancel</button>
+            <button class="btn danger primary" id="confirmYesBtn" type="button">Yes, delete</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const script = `
       var search=document.getElementById('search');
       search.oninput=function(){var v=search.value.toLowerCase();document.querySelectorAll('#releaseGrid .card').forEach(function(x){x.style.display=x.innerText.toLowerCase().includes(v)?'':'none'})};
-    `));
+
+      function adminKey(){var k=localStorage.getItem('release_admin_key')||prompt('Enter admin key');if(k)localStorage.setItem('release_admin_key',k);return k||''}
+
+      var releaseModal=document.getElementById('releaseModal');
+      var confirmModal=document.getElementById('confirmModal');
+      var editReleaseId=document.getElementById('editReleaseId');
+      var relTitle=document.getElementById('relTitle');
+      var relTag=document.getElementById('relTag');
+      var relDesc=document.getElementById('relDesc');
+      var relBranch=document.getElementById('relBranch');
+      var modalTitle=document.getElementById('releaseModalTitle');
+      var modalSub=document.getElementById('releaseModalSub');
+
+      function openReleaseModal(mode,data){
+        if(mode==='edit'){
+          modalTitle.textContent='Edit release';
+          modalSub.textContent='Update release details. Be careful changing the tag.';
+          editReleaseId.value=data.id;
+          relTitle.value=data.name||'';
+          relTag.value=data.tag_name||'';
+          relDesc.value=data.body||'';
+          relBranch.value='';
+        }else{
+          modalTitle.textContent='Create release';
+          modalSub.textContent='Fill in the details below. Tag must be unique.';
+          editReleaseId.value='';
+          relTitle.value='';relTag.value='';relDesc.value='';relBranch.value='';
+        }
+        releaseModal.classList.add('show');
+      }
+      function closeModals(){releaseModal.classList.remove('show');confirmModal.classList.remove('show')}
+      document.addEventListener('click',function(e){if(e.target.closest('[data-close-modal]')||e.target===releaseModal||e.target===confirmModal)closeModals()});
+
+      document.getElementById('addReleaseBtn').onclick=function(){openReleaseModal('add')};
+
+      document.querySelectorAll('[data-edit-release]').forEach(function(b){
+        b.onclick=function(){
+          var id=b.dataset.editRelease;
+          var card=b.closest('[data-release-id]');
+          var r={id:id,name:card.querySelector('h2 a').textContent,tag_name:card.querySelector('.chip.accent').textContent.replace('🏷️ ','').trim(),body:''};
+          fetch('/api/releases/'+id).then(function(x){return x.json()}).then(function(d){if(d.ok)r=d.release;openReleaseModal('edit',r)}).catch(function(){openReleaseModal('edit',r)});
+        };
+      });
+
+      var confirmYes=document.getElementById('confirmYesBtn');
+      document.querySelectorAll('[data-delete-release]').forEach(function(b){
+        b.onclick=function(){
+          var id=b.dataset.deleteRelease;
+          var card=b.closest('[data-release-id]');
+          var name=card.querySelector('h2 a').textContent;
+          document.getElementById('confirmTitle').textContent='Delete "'+name+'"?';
+          document.getElementById('confirmSub').textContent='The release and ALL its files will be permanently deleted. This cannot be undone.';
+          confirmModal.classList.add('show');
+          confirmYes.onclick=async function(){
+            var key=adminKey();if(!key)return;
+            confirmYes.disabled=true;
+            try{
+              var r=await fetch('/api/releases/'+id,{method:'DELETE',headers:{'x-admin-key':key}});
+              var d=await r.json();
+              if(!r.ok||!d.ok)throw Error(d.error||'Delete failed');
+              card.style.transition='opacity .25s,transform .25s';
+              card.style.opacity='0';card.style.transform='scale(.96)';
+              setTimeout(function(){card.remove()},250);
+              closeModals();showToast('✓ Release deleted successfully.');
+            }catch(x){showToast(x.message,true)}
+            confirmYes.disabled=false;
+          };
+        };
+      });
+
+      document.getElementById('saveReleaseBtn').onclick=async function(){
+        var key=adminKey();if(!key)return;
+        var btn=this;btn.disabled=true;
+        var payload={name:relTitle.value.trim(),tag_name:relTag.value.trim(),body:relDesc.value.trim(),target_commitish:relBranch.value.trim()||undefined};
+        if(!payload.name||!payload.tag_name){showToast('Title and tag are required.',true);btn.disabled=false;return}
+        var id=editReleaseId.value;
+        try{
+          var r=await fetch('/api/releases'+(id?'/'+id:''),{method:id?'PATCH':'POST',headers:{'Content-Type':'application/json','x-admin-key':key},body:JSON.stringify(payload)});
+          var d=await r.json();
+          if(!r.ok||!d.ok)throw Error(d.error||'Failed');
+          closeModals();showToast('✓ Release '+(id?'updated':'created')+' successfully.');
+          setTimeout(function(){location.reload()},600);
+        }catch(x){showToast(x.message,true)}
+        btn.disabled=false;
+      };
+    `;
+    res.send(page('Releases', body, script));
   } catch (e) { res.status(500).send(page('Error', `<div class="notice error">${esc(e.message)}</div>`)); }
 });
 
@@ -496,15 +422,14 @@ app.get('/release/:tag', async (req, res) => {
           </div>
         </div>
         <div class="asset-head">
+          <input type="checkbox" class="asset-check" data-check>
           <div class="file-icon">${fileIcon(asset.name)}</div>
           <div class="asset-info">
             <div class="asset-name">${esc(asset.name)}</div>
             <div class="asset-sub">
               <span>${humanSize(asset.size)}</span>
               <span class="dot"></span>
-              <span>${new Date(asset.created_at).toLocaleDateString()}</span>
-              <span class="dot"></span>
-              <span>⬇ ${asset.download_count || 0}</span>
+              <span>${new Date(asset.created_at).toLocaleDateString()} · ${new Date(asset.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
             </div>
           </div>
         </div>
@@ -513,9 +438,12 @@ app.get('/release/:tag', async (req, res) => {
       </div>
     `).join('');
     const body = `
-      <section class="hero" style="padding-bottom:8px">
-        <h1>${esc(release.name || release.tag_name)}</h1>
-        <p class="muted">Version: ${esc(release.tag_name)} · ${release.assets?.length || 0} file(s)</p>
+      <section class="hero">
+        <div class="hero-left">
+          <h1>${esc(release.name || release.tag_name)}</h1>
+          <p class="muted">Version: ${esc(release.tag_name)} · ${release.assets?.length || 0} file(s)</p>
+        </div>
+        <div><a class="btn" href="/">← Back</a></div>
       </section>
       <div class="toolbar">
         <div class="search-wrap">
@@ -529,13 +457,34 @@ app.get('/release/:tag', async (req, res) => {
             <option value="oldest">Oldest first</option>
           </select>
         </div>
+        <button class="btn" id="selectAllBtn" type="button">☑️ Select all</button>
+      </div>
+      <div class="bulk-bar" id="bulkBar">
+        <span class="count" id="bulkCount">0 selected</span>
+        <button class="btn sm primary" id="bulkDownloadBtn" type="button">⬇️ Download selected</button>
+        <button class="btn sm danger" id="bulkDeleteBtn" type="button">🗑️ Delete selected</button>
+        <button class="btn sm ghost" id="bulkClearBtn" type="button">✕ Clear</button>
       </div>
       <div id="status"></div>
       <div id="files">${assets || '<div class="notice">This release has no files.</div>'}</div>
+
+      <div class="modal-overlay" id="confirmModal">
+        <div class="modal">
+          <div class="modal-icon">🗑️</div>
+          <h3 id="confirmTitle">Delete selected files?</h3>
+          <p class="sub" id="confirmSub"></p>
+          <div class="modal-actions">
+            <button class="btn" type="button" data-close-modal>Cancel</button>
+            <button class="btn danger primary" id="confirmYesBtn" type="button">Yes, delete</button>
+          </div>
+        </div>
+      </div>
     `;
     const script = `
       var files=document.getElementById('files'),status=document.getElementById('status'),sort=document.getElementById('sort'),fileSearch=document.getElementById('fileSearch');
-      // restore saved sort pref
+      var bulkBar=document.getElementById('bulkBar'),bulkCount=document.getElementById('bulkCount');
+      var confirmModal=document.getElementById('confirmModal');
+      var selectAllBtn=document.getElementById('selectAllBtn');
       var savedSort=localStorage.getItem('release_sort_pref');
       if(savedSort==='newest'||savedSort==='oldest'){sort.value=savedSort}
       function adminKey(){var k=localStorage.getItem('release_admin_key')||prompt('Enter admin key');if(k)localStorage.setItem('release_admin_key',k);return k||''}
@@ -546,7 +495,77 @@ app.get('/release/:tag', async (req, res) => {
       fileSearch.oninput=filterFiles;
       reorder();filterFiles();
 
-      // ---- rename helper: never touch extension, never show it ----
+      // ---------- Smart Select-All button ----------
+      function refreshSelectAllLabel(){
+        var cbs=Array.from(files.querySelectorAll('[data-check]'));
+        if(!cbs.length){selectAllBtn.style.display='none';return}
+        selectAllBtn.style.display='';
+        var checked=cbs.filter(function(c){return c.checked}).length;
+        if(checked===0){selectAllBtn.textContent='☑️ Select all'}
+        else if(checked===cbs.length){selectAllBtn.textContent='🔲 Select none'}
+        else{selectAllBtn.textContent='🔲 Deselect all'}
+      }
+
+      function updateBulk(){
+        var checks=files.querySelectorAll('[data-check]:checked');
+        bulkCount.textContent=checks.length+' selected';
+        bulkBar.classList.toggle('show',checks.length>0);
+        files.querySelectorAll('[data-asset]').forEach(function(a){a.classList.toggle('selected',a.querySelector('[data-check]').checked)});
+        refreshSelectAllLabel();
+      }
+      files.addEventListener('change',function(e){if(e.target.matches('[data-check]'))updateBulk()});
+
+      selectAllBtn.onclick=function(){
+        var cbs=Array.from(files.querySelectorAll('[data-check]'));
+        if(!cbs.length)return;
+        var allChecked=cbs.every(function(c){return c.checked});
+        cbs.forEach(function(c){c.checked=!allChecked});
+        updateBulk();
+      };
+      document.getElementById('bulkClearBtn').onclick=function(){files.querySelectorAll('[data-check]').forEach(function(c){c.checked=false});updateBulk()};
+
+      document.getElementById('bulkDownloadBtn').onclick=async function(){
+        var selected=Array.from(files.querySelectorAll('[data-check]:checked')).map(function(c){return c.closest('[data-asset]')});
+        if(!selected.length)return;
+        showToast('Starting download of '+selected.length+' file(s)...');
+        for(var i=0;i<selected.length;i++){
+          var a=document.createElement('a');a.href=selected[i].dataset.url;a.download='';a.target='_blank';
+          document.body.appendChild(a);a.click();a.remove();
+          await new Promise(function(r){setTimeout(r,700)});
+        }
+      };
+
+      var confirmYes=document.getElementById('confirmYesBtn');
+      document.getElementById('bulkDeleteBtn').onclick=function(){
+        var selected=Array.from(files.querySelectorAll('[data-check]:checked')).map(function(c){return c.closest('[data-asset]')});
+        if(!selected.length)return;
+        document.getElementById('confirmTitle').textContent='Delete '+selected.length+' file(s)?';
+        document.getElementById('confirmSub').textContent='Selected files will be permanently deleted. This cannot be undone.';
+        confirmModal.classList.add('show');
+        confirmYes.onclick=async function(){
+          var key=adminKey();if(!key)return;
+          confirmYes.disabled=true;
+          var failed=0;
+          for(var i=0;i<selected.length;i++){
+            try{
+              var r=await fetch('/api/assets/'+selected[i].dataset.id,{method:'DELETE',headers:{'x-admin-key':key}});
+              var d=await r.json();
+              if(!r.ok||!d.ok)throw Error(d.error||'Failed');
+              selected[i].remove();
+            }catch(x){failed++}
+          }
+          confirmYes.disabled=false;
+          confirmModal.classList.remove('show');
+          updateBulk();
+          if(failed===0)showToast('✓ '+selected.length+' file(s) deleted.');
+          else showToast('⚠ '+failed+' of '+selected.length+' failed.',true);
+          msg(failed===0?'✓ '+selected.length+' file(s) deleted.':('⚠ '+failed+' file(s) could not be deleted.'),failed===0);
+        };
+      };
+      document.addEventListener('click',function(e){if(e.target.closest('[data-close-modal]')||e.target===confirmModal)confirmModal.classList.remove('show')});
+
+      updateBulk();
+
       function stripExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(0,i):name}
       function getExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(i):''}
 
@@ -559,14 +578,11 @@ app.get('/release/:tag', async (req, res) => {
         if(button.dataset.action==='rename'||button.dataset.action==='delete'){
           var key=adminKey();if(!key)return;
           if(button.dataset.action==='rename'){
-            var ext=getExt(name);
-            var base=stripExt(name);
+            var ext=getExt(name),base=stripExt(name);
             var next=prompt('Rename file (extension '+ext+' stays unchanged):',base);
             if(next===null)return;
-            next=next.trim();
-            if(!next||next===base)return;
-            // If user typed an extension, strip it
-            if(next.toLowerCase().endsWith(ext.toLowerCase())) next=next.slice(0,next.length-ext.length).trim();
+            next=next.trim();if(!next||next===base)return;
+            if(next.toLowerCase().endsWith(ext.toLowerCase()))next=next.slice(0,next.length-ext.length).trim();
             if(!next)return;
             try{
               var r=await fetch('/api/assets/'+id,{method:'PATCH',headers:{'Content-Type':'application/json','x-admin-key':key},body:JSON.stringify({name:next})});
@@ -580,11 +596,11 @@ app.get('/release/:tag', async (req, res) => {
             var r=await fetch('/api/assets/'+id,{method:'DELETE',headers:{'x-admin-key':key}}),d=await r.json();
             if(!r.ok||!d.ok){msg(d.error||'Delete failed',false);showToast(d.error||'Delete failed',true);return}
             card.remove();msg('✓ File deleted successfully.');showToast('✓ File deleted successfully.');
+            updateBulk();
           }
           return;
         }
-        var url=card.dataset.url;
-        var label=button.dataset.action==='view'?'Direct view link':'Direct download link';
+        var url=card.dataset.url,label=button.dataset.action==='view'?'Direct view link':'Direct download link';
         try{await navigator.clipboard.writeText(url);msg('✓ '+label+' copied.');showToast('✓ '+label+' copied to clipboard.')}
         catch{prompt('Copy this link:',url);showToast('⚠ Clipboard blocked — copy manually.',true)}
       });
@@ -593,30 +609,22 @@ app.get('/release/:tag', async (req, res) => {
   } catch (e) { res.status(e.status || 500).send(page('Error', `<div class="notice error">${esc(e.message)}</div>`)); }
 });
 
-/* ============ ADMIN PAGE ============ */
+/* ============ ADMIN UPLOAD PAGE ============ */
 app.get('/admin', async (_req, res) => {
   try {
     const releases = await getReleases();
     const options = releases.filter(r => !r.draft).map(r => `<option value="${r.id}">${esc(r.name || r.tag_name)} (${esc(r.tag_name)})</option>`).join('');
     const body = `
       <section class="hero">
-        <h1>Upload files</h1>
-        <p class="muted">Rename selected files before uploading. File extensions are protected and never editable.</p>
+        <div class="hero-left">
+          <h1>Upload files</h1>
+          <p class="muted">Rename selected files before uploading. File extensions are protected and never editable.</p>
+        </div>
       </section>
       <div class="card">
-        <div class="form-group" id="keyBox">
-          <label>Admin key</label>
-          <input id="adminKey" type="password" placeholder="Enter your admin key">
-        </div>
-        <div class="form-group">
-          <label>Destination release</label>
-          <select id="releaseId">${options}</select>
-        </div>
-        <div class="form-group">
-          <label>Select files <span class="muted">(each up to ${MAX_MB} MB)</span></label>
-          <input id="file" class="file-input" type="file" multiple>
-          <div id="selected" class="selected-list"></div>
-        </div>
+        <div class="form-group" id="keyBox"><label>Admin key</label><input id="adminKey" type="password" placeholder="Enter your admin key"></div>
+        <div class="form-group"><label>Destination release</label><select id="releaseId">${options || '<option value="">No releases found</option>'}</select></div>
+        <div class="form-group"><label>Select files <span class="muted">(each up to ${MAX_MB} MB)</span></label><input id="file" class="file-input" type="file" multiple><div id="selected" class="selected-list"></div></div>
         <button class="btn primary" id="uploadBtn" type="button">Upload selected files ↥</button>
         <div id="status"></div>
       </div>
@@ -633,17 +641,13 @@ app.get('/admin', async (_req, res) => {
       selectedBox.onclick=function(e){
         var r=e.target.closest('[data-rename]'),x=e.target.closest('[data-remove]');
         if(r){
-          var i=Number(r.dataset.rename);
-          var ext=getExt(files[i].original);
-          var base=stripExt(files[i].name);
+          var i=Number(r.dataset.rename),ext=getExt(files[i].original),base=stripExt(files[i].name);
           var next=prompt('Rename file (extension '+ext+' stays unchanged):',base);
           if(next===null)return;
-          next=next.trim();
+          next=next.trim();if(!next)return;
+          if(next.toLowerCase().endsWith(ext.toLowerCase()))next=next.slice(0,next.length-ext.length).trim();
           if(!next)return;
-          if(next.toLowerCase().endsWith(ext.toLowerCase())) next=next.slice(0,next.length-ext.length).trim();
-          if(!next)return;
-          files[i].name=next+ext;
-          render()
+          files[i].name=next+ext;render();
         }
         if(x){files.splice(Number(x.dataset.remove),1);render()}
       };
@@ -658,6 +662,7 @@ app.get('/admin', async (_req, res) => {
         var key=keyInput.value.trim();
         if(!key)return statusBox.innerHTML='<div class="notice status error">Admin key required.</div>';
         if(!files.length)return statusBox.innerHTML='<div class="notice status error">Select at least one file.</div>';
+        if(!document.getElementById('releaseId').value)return statusBox.innerHTML='<div class="notice status error">No release selected. Create one from home page first.</div>';
         localStorage.setItem('release_admin_key',key);keyBox.style.display='none';uploadBtn.disabled=true;
         var results=[];for(var i=0;i<files.length;i++)results.push(await one(files[i],i+1,files.length));
         var bad=results.filter(function(x){return!x.ok});
@@ -672,7 +677,42 @@ app.get('/admin', async (_req, res) => {
   } catch (e) { res.status(500).send(page('Admin Error', `<div class="notice error">${esc(e.message)}</div>`)); }
 });
 
-/* ============ APIs ============ */
+/* ============ RELEASE APIs ============ */
+app.get('/api/releases/:id', async (req, res) => {
+  try { const release = await getReleaseById(req.params.id); res.json({ ok: true, release }); }
+  catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/releases', requireAdmin, async (req, res) => {
+  try {
+    const { name, tag_name, body: desc, target_commitish } = req.body || {};
+    if (!name || !tag_name) return res.status(400).json({ ok: false, error: 'Title and tag are required.' });
+    const payload = { name: String(name).trim(), tag_name: String(tag_name).trim(), body: String(desc || ''), draft: false, prerelease: false };
+    if (target_commitish) payload.target_commitish = String(target_commitish).trim();
+    const release = await githubApi(`/repos/${REPO}/releases`, { method: 'POST', body: JSON.stringify(payload) });
+    res.json({ ok: true, release });
+  } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+});
+
+app.patch('/api/releases/:id', requireAdmin, async (req, res) => {
+  try {
+    const { name, tag_name, body: desc } = req.body || {};
+    const payload = {};
+    if (name) payload.name = String(name).trim();
+    if (tag_name) payload.tag_name = String(tag_name).trim();
+    if (desc !== undefined) payload.body = String(desc);
+    if (!Object.keys(payload).length) return res.status(400).json({ ok: false, error: 'Nothing to update.' });
+    const release = await githubApi(`/repos/${REPO}/releases/${encodeURIComponent(req.params.id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    res.json({ ok: true, release });
+  } catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+});
+
+app.delete('/api/releases/:id', requireAdmin, async (req, res) => {
+  try { await githubApi(`/repos/${REPO}/releases/${encodeURIComponent(req.params.id)}`, { method: 'DELETE' }); res.json({ ok: true }); }
+  catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); }
+});
+
+/* ============ ASSET APIs ============ */
 app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) => {
   const file = req.file?.path;
   try {
