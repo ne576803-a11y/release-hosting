@@ -19,6 +19,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-hosting-'));
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, tempDir),
+    // Always use ASCII-only temp name — original name never touches filesystem
     filename: (_req, _file, cb) => {
       const rand = Math.random().toString(36).slice(2);
       cb(null, `${Date.now()}-${rand}.tmp`);
@@ -31,11 +32,25 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json({ limit: '2mb' }));
 
 /* ============ helpers ============ */
-const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
 /**
- * Decode a multipart-supplied string that might be UTF-8 bytes
- * misinterpreted as latin1 by some parsers.
+ * Decode base64-encoded UTF-8 filename safely.
+ * Returns null if the input is invalid.
+ */
+function decodeBase64Filename(b64) {
+  if (!b64 || typeof b64 !== 'string') return null;
+  try {
+    const buf = Buffer.from(b64, 'base64');
+    // Validate UTF-8 by decoding as utf8 and checking for replacement chars
+    const str = buf.toString('utf8');
+    if (str.includes('\uFFFD')) return null;
+    return str;
+  } catch { return null; }
+}
+
+/**
+ * Fallback: fix a latin1-decoded UTF-8 string from multer/busboy.
+ * Only used if base64 field is missing.
  */
 function fixOriginalName(name) {
   if (!name) return '';
@@ -52,6 +67,8 @@ function fixOriginalName(name) {
     return decoded;
   } catch { return s; }
 }
+
+const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
 const safeName = value => {
   let name = String(value || '');
@@ -331,7 +348,6 @@ applyTheme();
 document.getElementById('themeBtn').onclick=function(){localStorage.setItem('release_theme',document.body.classList.contains('light')?'dark':'light');applyTheme()};
 function showToast(msg,isError){var t=document.getElementById('toast');t.textContent=msg;t.classList.toggle('error',!!isError);t.classList.add('show');clearTimeout(t._timer);t._timer=setTimeout(function(){t.classList.remove('show')},2800)}
 function humanSize(b){b=Number(b||0);if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(1)+' KB';if(b<1073741824)return (b/1048576).toFixed(2)+' MB';return (b/1073741824).toFixed(2)+' GB'}
-/* 12-hour format with AM/PM, in user's local time */
 function formatLocalDateTime(iso){
   if(!iso)return '';
   var d=new Date(iso);
@@ -781,6 +797,13 @@ app.get('/admin', async (_req, res) => {
       function safeHtml(v){return String(v).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'})[c]})}
       function stripExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(0,i):name}
       function getExt(name){var i=name.lastIndexOf('.');return i>0?name.slice(i):''}
+      // UTF-8 safe Base64 encode
+      function toBase64Utf8(str){
+        var bytes=new TextEncoder().encode(str);
+        var bin='';
+        for(var i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);
+        return btoa(bin);
+      }
       function render(){
         selectedBox.innerHTML=files.map(function(x,i){
           var statusTag='';
@@ -850,9 +873,13 @@ app.get('/admin', async (_req, res) => {
           retry=retry||0;
           var form=new FormData();
           form.append('release_id',releaseSelect.value);
-          form.append('file',item.file,item.name);
-          // Send filename in a separate field so backend always has correct UTF-8 name
-          form.append('original_filename',item.name);
+          // IMPORTANT: send the base64-encoded filename BEFORE the file field.
+          // This way the server always has the correct UTF-8 name regardless of
+          // how the multipart parser mangles the filename header.
+          form.append('filename_b64', toBase64Utf8(item.name));
+          form.append('original_filename', item.name);
+          form.append('file', item.file, item.name);
+
           var q=new XMLHttpRequest(),started=performance.now();
           var slot=activeUploads[index]={xhr:q,cancelled:false};
 
@@ -1006,10 +1033,22 @@ app.post('/api/upload', requireAdmin, upload.single('file'), async (req, res) =>
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file was uploaded.' });
     if (!req.body.release_id) return res.status(400).json({ ok: false, error: 'release_id is required.' });
 
-    // Prefer the client-sent original_filename (correct UTF-8), fallback to multer's
-    const rawName = req.body.original_filename || req.file.originalname || '';
-    const decodedName = fixOriginalName(rawName);
-    let name = safeName(decodedName);
+    // Priority 1: base64-encoded UTF-8 filename (browser sent it — 100% reliable)
+    // Priority 2: plain original_filename field
+    // Priority 3: multer's originalname (may be mangled)
+    let finalName = null;
+    if (req.body.filename_b64) {
+      const decoded = decodeBase64Filename(req.body.filename_b64);
+      if (decoded) finalName = decoded;
+    }
+    if (!finalName && req.body.original_filename) {
+      finalName = fixOriginalName(req.body.original_filename);
+    }
+    if (!finalName && req.file.originalname) {
+      finalName = fixOriginalName(req.file.originalname);
+    }
+
+    let name = safeName(finalName || 'file');
     if (!name) name = 'file';
 
     const existing = await githubApi(`/repos/${REPO}/releases/${encodeURIComponent(req.body.release_id)}/assets`);
